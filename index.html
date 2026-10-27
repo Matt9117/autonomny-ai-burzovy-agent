@@ -30,6 +30,13 @@
                 <span id="agentStatusText">AGENT AKTÍVNY</span>
             </div>
 
+            <select id="leverageSelect" class="form-control" style="width:auto; padding:6px 10px; font-weight:700; border-color:var(--accent-purple); background:rgba(139,92,246,0.15);" onchange="changeLeverageMode()" title="Finančná páka násobí percentuálny zisk aj stratu každého obchodu">
+                <option value="1">Páka: 1x (Klasika)</option>
+                <option value="3">Páka: 3x (Agresívne)</option>
+                <option value="5" selected>⚡ Páka: 5x (TURBO RAST)</option>
+                <option value="10">🔥 Páka: 10x (EXTREME)</option>
+            </select>
+
             <button id="btnToggleAgent" class="btn btn-primary" onclick="toggleAgent()">
                 Pozastaviť agenta
             </button>
@@ -51,15 +58,20 @@
         <section class="kpi-grid">
             <div class="kpi-card">
                 <div class="kpi-label">
-                    <span>Celková hodnota účtu (Equity)</span>
+                    <span>Celková hodnota účtu (Cieľ: 500 €)</span>
                     <span id="totalPnlBadge" class="badge badge-neutral">0.00 %</span>
                 </div>
                 <div class="kpi-value">
                     <span id="kpiEquity">100.00 €</span>
                 </div>
-                <div class="kpi-sub">
-                    <span>Štartovací kapitál: <strong>100.00 €</strong></span>
-                    <span>Čistý zisk/strata: <strong id="kpiTotalPnl">0.00 €</strong></span>
+                <div>
+                    <div class="kpi-sub">
+                        <span>Čistý zisk: <strong id="kpiTotalPnl">0.00 €</strong></span>
+                        <span id="goalProgressLabel" style="color:var(--accent-cyan); font-weight:700;">Progres k 500 €: 0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="goalProgressBar" class="progress-fill" style="width: 2%; background: linear-gradient(90deg, #10b981, #06b6d4);"></div>
+                    </div>
                 </div>
             </div>
 
@@ -137,6 +149,9 @@
                         </div>
                         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--text-secondary); padding-top:4px; border-top:1px solid rgba(35,48,77,0.5);">
                             <strong style="color:var(--text-primary);">Aktívne balíky trhov:</strong>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer; color:#fca5a5; font-weight:600;">
+                                <input type="checkbox" id="packLeveraged" checked onchange="toggleMarketPacks()"> ⚡ 2x/3x Pákové ETF Rakety (10)
+                            </label>
                             <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
                                 <input type="checkbox" id="packTech" checked onchange="toggleMarketPacks()"> 🚀 AI, Čipy & Big Tech (20)
                             </label>
@@ -144,13 +159,13 @@
                                 <input type="checkbox" id="packMovers" checked onchange="toggleMarketPacks()"> 🔥 Day-Trading Movers & FinTech (20)
                             </label>
                             <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
-                                <input type="checkbox" id="packSp500" checked onchange="toggleMarketPacks()"> 🏛️ S&P 500 Lídri (20)
+                                <input type="checkbox" id="packSp500" onchange="toggleMarketPacks()"> 🏛️ S&P 500 Lídri (20)
                             </label>
                             <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
                                 <input type="checkbox" id="packEtf" onchange="toggleMarketPacks()"> 📊 ETF & Komodity (8)
                             </label>
                             <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
-                                <input type="checkbox" id="chkIncludeCrypto" onchange="toggleCryptoTickers()"> 🪙 24/7 Krypto (10)
+                                <input type="checkbox" id="chkIncludeCrypto" checked onchange="toggleCryptoTickers()"> 🪙 24/7 Krypto (10)
                             </label>
                         </div>
                     </div>
