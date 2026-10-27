@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonómny AI Burzový Agent | 100 € Paper & Live Trading</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Top Navigation & Control Bar -->
+    <header class="top-header">
+        <div class="brand">
+            <div class="brand-icon">AI</div>
+            <div class="brand-title">
+                <h1>Autonómny Burzový Agent <span id="modeBadge" class="badge badge-warn" style="margin-left:8px;">PAPER TRADING (100 €)</span></h1>
+                <div class="brand-subtitle">
+                    <span id="marketSessionStatus">Načítavam stav burzy...</span>
+                    <span>•</span>
+                    <span>Kurz EUR/USD: <strong id="fxRateLabel">1.0800</strong></span>
+                    <span>•</span>
+                    <span>Posledný sken: <strong id="lastScanTime">--:--:--</strong></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="header-controls">
+            <div class="status-pill">
+                <span id="agentPulse" class="pulse-dot"></span>
+                <span id="agentStatusText">AGENT AKTÍVNY</span>
+            </div>
+
+            <button id="btnToggleAgent" class="btn btn-primary" onclick="toggleAgent()">
+                Pozastaviť agenta
+            </button>
+            <button class="btn" onclick="runCycleNow()" title="Okamžite prepočítať indikátory, správy a vykonať obchody">
+                ⚡ Okamžitý sken
+            </button>
+            <button class="btn btn-danger" onclick="closeAllPositions('Manuálne uzatvorenie všetkých pozícií')" title="Predať všetky otvorené pozície do hotovosti (EOD / Panic)">
+                🛑 Predať všetko (EOD)
+            </button>
+            <button class="btn" onclick="openSettingsModal()">
+                ⚙️ Broker & Nastavenia
+            </button>
+        </div>
+    </header>
+
+    <main class="container">
+
+        <!-- KPI Metrics Row -->
+        <section class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-label">
+                    <span>Celková hodnota účtu (Equity)</span>
+                    <span id="totalPnlBadge" class="badge badge-neutral">0.00 %</span>
+                </div>
+                <div class="kpi-value">
+                    <span id="kpiEquity">100.00 €</span>
+                </div>
+                <div class="kpi-sub">
+                    <span>Štartovací kapitál: <strong>100.00 €</strong></span>
+                    <span>Čistý zisk/strata: <strong id="kpiTotalPnl">0.00 €</strong></span>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-label">
+                    <span>Voľný kapitál vs. V pozíciách</span>
+                    <span id="openPosCountBadge" class="badge badge-neutral">0 / 4 pozície</span>
+                </div>
+                <div class="kpi-value">
+                    <span id="kpiCash">100.00 €</span>
+                    <span style="font-size:14px; font-weight:500; color:var(--text-secondary);">voľné</span>
+                </div>
+                <div>
+                    <div class="kpi-sub">
+                        <span>Investované: <strong id="kpiInvested">0.00 €</strong></span>
+                        <span id="kpiExposurePct">0 % kapitálu</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="exposureBar" class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-label">
+                    <span>Úspešnosť obchodov (Win Rate)</span>
+                    <span id="profitFactorBadge" class="badge badge-neutral">PF: --</span>
+                </div>
+                <div class="kpi-value">
+                    <span id="kpiWinRate">0.0 %</span>
+                </div>
+                <div class="kpi-sub">
+                    <span>Uzavreté obchody: <strong id="kpiTotalTrades">0</strong></span>
+                    <span>Ziskové / Stratové: <strong id="kpiWinsLosses">0W / 0L</strong></span>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-label">
+                    <span>Adaptívne učenie (Self-Learning)</span>
+                    <span id="learningGenBadge" class="badge badge-profit">Gen #1</span>
+                </div>
+                <div class="kpi-value" style="font-size:20px;">
+                    <span id="kpiDominantFactor">Kombinovaná AI + TA</span>
+                </div>
+                <div class="kpi-sub">
+                    <span>Prah istoty na nákup: <strong id="kpiThreshold">28 bodov</strong></span>
+                    <span>SL / TP: <strong id="kpiSlTp">-1.8% / +3.2%</strong></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content Grid -->
+        <section class="main-grid">
+
+            <!-- Left Column: Live Market Scanner + Interactive Intraday Chart -->
+            <div style="display:flex; flex-direction:column; gap:20px;">
+                <div class="card">
+                    <div class="card-header" style="flex-direction:column; align-items:stretch; gap:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                            <div class="card-title">
+                                📡 Živý skener trhu & AI hodnotenie príležitostí
+                                <span id="scannerCountBadge" class="badge badge-profit">0 akcií</span>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                <input type="text" id="scannerSearchInput" class="form-control" placeholder="🔍 Hľadať ticker..." style="width:135px; padding:4px 8px; font-size:12px;" oninput="renderScannerTable()">
+                                <select id="scannerSortSelect" class="form-control" style="width:185px; padding:4px 8px; font-size:12px;" onchange="renderScannerTable()">
+                                    <option value="score_desc">Zoradiť: Najvyššie AI Skóre</option>
+                                    <option value="change_desc">Zoradiť: Najväčší rast %</option>
+                                    <option value="change_asc">Zoradiť: Najväčší pokles %</option>
+                                    <option value="rsi_asc">Zoradiť: Najnižšie RSI (Prepredané)</option>
+                                    <option value="symbol_asc">Zoradiť: Abecedne (A-Z)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--text-secondary); padding-top:4px; border-top:1px solid rgba(35,48,77,0.5);">
+                            <strong style="color:var(--text-primary);">Aktívne balíky trhov:</strong>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                <input type="checkbox" id="packTech" checked onchange="toggleMarketPacks()"> 🚀 AI, Čipy & Big Tech (20)
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                <input type="checkbox" id="packMovers" checked onchange="toggleMarketPacks()"> 🔥 Day-Trading Movers & FinTech (20)
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                <input type="checkbox" id="packSp500" checked onchange="toggleMarketPacks()"> 🏛️ S&P 500 Lídri (20)
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                <input type="checkbox" id="packEtf" onchange="toggleMarketPacks()"> 📊 ETF & Komodity (8)
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                                <input type="checkbox" id="chkIncludeCrypto" onchange="toggleCryptoTickers()"> 🪙 24/7 Krypto (10)
+                            </label>
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding:0;">
+                        <div class="table-wrap" style="max-height:430px; overflow-y:auto;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Cena</th>
+                                        <th>Dnes %</th>
+                                        <th>RSI / ATR%</th>
+                                        <th>Trend (EMA/VWAP)</th>
+                                        <th>MACD</th>
+                                        <th>Pamäť AI (Win%)</th>
+                                        <th>AI Skóre</th>
+                                        <th>Rozhodnutie</th>
+                                        <th>Akcia</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="scannerTableBody">
+                                    <tr>
+                                        <td colspan="10" style="text-align:center; padding:24px; color:var(--text-secondary);">
+                                            Sťahujem živé dáta z burzy (Yahoo Finance)...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Selected Ticker Intraday Chart & Technical Breakdown -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            📈 Intraday graf (5m) a technický rozbor: <span id="chartSymbolTitle" style="color:var(--accent-cyan);">NVDA</span>
+                        </div>
+                        <div id="chartIndicatorsSummary" style="font-size:12px; color:var(--text-secondary);">
+                            Kliknite na ľubovoľný riadok v skeneri pre detailný graf
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="priceChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Open Positions + Self-Learning Brain -->
+            <div style="display:flex; flex-direction:column; gap:20px;">
+
+                <!-- Open Positions -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            💼 Otvorené pozície (Frakčné portfólio v EUR)
+                        </div>
+                        <span id="openPnlSummary" class="badge badge-neutral">Otvorený P&L: 0.00 €</span>
+                    </div>
+                    <div class="card-body" style="padding:0;">
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Vklad (€)</th>
+                                        <th>Nákup / Teraz</th>
+                                        <th>Zisk / Strata</th>
+                                        <th>Stop-Loss / Take-Profit</th>
+                                        <th>Dôvod vstupu</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="positionsTableBody">
+                                    <tr>
+                                        <td colspan="7" style="text-align:center; padding:24px; color:var(--text-secondary);">
+                                            Zatiaľ žiadne otvorené pozície. Agent čaká na signál nad prahom istoty.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Self-Learning Brain & Adaptive Weights -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            🧠 Mozog Agenta & Hĺbkové učenie (Reinforcement + ATR + Pamäť akcií)
+                        </div>
+                        <div style="display:flex; gap:6px;">
+                            <button id="btnTrainHistory" class="btn btn-sm btn-primary" onclick="runHistoricalTraining()" title="Stiahne 5-dňovú históriu všetkých sledovaných akcií (~18 000 sviečok), nasimuluje stovky obchodov a natrénuje váhy aj reputáciu každej akcie">
+                                🏋️ Trénovať AI na histórii (5 dní)
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="trainingSummaryBanner" style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                            <span>📊 <strong>Tréningová pamäť:</strong> <span id="lblTrainedTrades">0</span> natrénovaných obchodov na historických a živých dátach</span>
+                            <span id="lblAtrMode" class="badge badge-profit">Adaptívny ATR Stop-Loss Aktívny</span>
+                        </div>
+
+                        <div class="weights-grid" id="weightsContainer">
+                            <!-- Dynamically populated weights -->
+                        </div>
+
+                        <div style="margin-top:10px; margin-bottom:10px;">
+                            <div style="font-size:12px; font-weight:700; margin-bottom:6px; color:var(--text-secondary); display:flex; justify-content:space-between;">
+                                <span>🎯 Pamäť AI na konkrétne akcie (Najlepšie vs. Penalizované tituly):</span>
+                                <span id="lblTickerMemoryCount" class="text-muted">0 akcií v pamäti</span>
+                            </div>
+                            <div id="tickerMemoryBadges" style="display:flex; gap:6px; flex-wrap:wrap; max-height:85px; overflow-y:auto; padding:4px 0;">
+                                <!-- Dynamically populated ticker reputation badges -->
+                            </div>
+                        </div>
+
+                        <div style="margin-top:10px;">
+                            <div style="font-size:12px; font-weight:700; margin-bottom:6px; color:var(--text-secondary);">
+                                📝 Denník sebareflexie a naučených lekcií:
+                            </div>
+                            <div id="learningLogList" class="feed-list" style="max-height:140px;">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live AI Decision Console -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            🤖 Myšlienkový prúd agenta (Live AI Log)
+                        </div>
+                        <button class="btn btn-sm" onclick="clearLogs()">Vyčistiť</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="agentLogConsole" class="log-console"></div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Bottom Section: News Sentiment Stream & Closed Trades History -->
+        <section class="bottom-grid">
+            <!-- Live News & Estimates -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        📰 Sledované správy z burzy & NLP Sentiment Analýza
+                    </div>
+                    <button class="btn btn-sm" onclick="fetchAllNews()">Obnoviť správy</button>
+                </div>
+                <div class="card-body">
+                    <div id="newsFeedList" class="feed-list">
+                        <div style="color:var(--text-secondary); font-size:13px;">Načítavam najnovšie správy z trhov...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Closed Trades History -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        📜 História uzavretých obchodov a lekcií
+                    </div>
+                    <span id="realizedPnlBadge" class="badge badge-neutral">Realizovaný zisk: 0.00 €</span>
+                </div>
+                <div class="card-body" style="padding:0;">
+                    <div class="table-wrap" style="max-height:380px; overflow-y:auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Čas</th>
+                                    <th>Ticker</th>
+                                    <th>Objem (€)</th>
+                                    <th>Vstup → Výstup</th>
+                                    <th>Výsledok (€ / %)</th>
+                                    <th>Dôvod predaja & Lekcia</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historyTableBody">
+                                <tr>
+                                    <td colspan="6" style="text-align:center; padding:24px; color:var(--text-secondary);">
+                                        Zatiaľ žiadne uzavreté obchody.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Settings & Broker Modal -->
+    <div id="settingsModal" class="modal-backdrop">
+        <div class="modal">
+            <div class="card-header">
+                <div class="card-title">⚙️ Nastavenia Agenta, Stratégie a Prepojenia s Brokerom</div>
+                <button class="btn btn-sm" onclick="closeSettingsModal()">✕</button>
+            </div>
+            <div class="card-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Režim obchodovania</label>
+                        <select id="cfgExecutionMode" class="form-control">
+                            <option value="simulator">Vstavaný Paper Trading Simulátor (100 € na živých dátach)</option>
+                            <option value="trading212_paper">Trading 212 API - Practice (Paper) účet</option>
+                            <option value="alpaca_paper">Alpaca Markets API - Paper účet</option>
+                            <option value="trading212_live">Trading 212 API - LIVE (Reálne peniaze!)</option>
+                            <option value="alpaca_live">Alpaca Markets API - LIVE (Reálne peniaze!)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Obchodné hodiny</label>
+                        <select id="cfgMarketHoursMode" class="form-control">
+                            <option value="extended">Pre-Market + Hlavná burza + Extended (Odporúčané na testovanie)</option>
+                            <option value="strict_us">Prísne iba hlavné hodiny US burzy (15:30 – 21:55 CET + Auto EOD predaj)</option>
+                            <option value="always">24/7 Neobmedzene (Okamžité testovanie kedykoľvek)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Max. veľkosť jednej pozície (€)</label>
+                        <input type="number" id="cfgMaxPosEur" class="form-control" value="25" min="5" max="100" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Max. počet súčasne otvorených pozícií</label>
+                        <input type="number" id="cfgMaxPositions" class="form-control" value="4" min="1" max="10">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Sledované akcie / tickery (oddelené čiarkou)</label>
+                    <input type="text" id="cfgWatchlist" class="form-control" value="NVDA,AAPL,TSLA,MSFT,AMD,META,AMZN,GOOGL,PLTR,COIN">
+                </div>
+
+                <hr style="border:none; border-top:1px solid var(--border-color); margin:14px 0;">
+
+                <div style="font-size:12px; font-weight:700; color:var(--accent-cyan); margin-bottom:10px;">
+                    🔑 API Kľúče Brokera (voliteľné – vyplňte až pri prechode na Trading 212 / Alpaca)
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>API Key (Trading 212 alebo Alpaca Key ID)</label>
+                        <input type="password" id="cfgBrokerKey" class="form-control" placeholder="Vložte API kľúč...">
+                    </div>
+                    <div class="form-group">
+                        <label>API Secret (iba pre Alpaca)</label>
+                        <input type="password" id="cfgBrokerSecret" class="form-control" placeholder="Vložte Secret kľúč...">
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:18px; flex-wrap:wrap; gap:10px;">
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-danger" onclick="resetSimulatorAccount()">
+                            🗑️ Resetovať účet na 100 €
+                        </button>
+                        <button class="btn" onclick="testBrokerConnection()">
+                            🔌 Otestovať API brokera
+                        </button>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn" onclick="closeSettingsModal()">Zrušiť</button>
+                        <button class="btn btn-primary" onclick="saveSettings()">Uložiť nastavenia</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
