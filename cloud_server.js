@@ -36,6 +36,9 @@ if (!fs.existsSync(DATA_DIR)) {
 // ============================================================================
 
 const MARKET_PACKS = {
+    leveraged: [
+        "SOXL", "TQQQ", "NVDL", "TSLL", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "FNGU"
+    ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
         "PLTR", "ARM", "SMCI", "MU", "INTC", "QCOM", "ASML", "ORCL", "CRM", "ADBE"
@@ -56,10 +59,10 @@ const MARKET_PACKS = {
 };
 
 const DEFAULT_STATE = {
-    version: 3,
+    version: 4,
     agentActive: true,
-    includeCrypto: false,
-    packs: { tech: true, movers: true, sp500: true, etf: false },
+    includeCrypto: true,
+    packs: { leveraged: true, tech: true, movers: true, sp500: false, etf: false },
     selectedSymbol: "NVDA",
     fxRateEurUsd: 1.08,
     portfolio: {
@@ -71,29 +74,30 @@ const DEFAULT_STATE = {
     learning: {
         generation: 1,
         totalTrainedTrades: 0,
-        minScoreThreshold: 28,
-        stopLossPct: 1.8,
-        takeProfitPct: 3.2,
-        slAtrMultiplier: 2.4,
-        tpAtrMultiplier: 4.5,
-        trailingTriggerPct: 1.2,
-        trailingDistancePct: 0.8,
+        minScoreThreshold: 26,
+        stopLossPct: 1.2,
+        takeProfitPct: 2.5,
+        slAtrMultiplier: 1.8,
+        tpAtrMultiplier: 3.6,
+        trailingTriggerPct: 0.55,
+        trailingDistancePct: 0.30,
         weights: { rsi: 22, trend: 26, macd: 20, volume: 14, sentiment: 18 },
         tickerMemory: {},
         lessons: [
             {
                 time: new Date().toLocaleTimeString("sk-SK"),
                 gen: 1,
-                text: "24/7 Cloud Agent inicializovaný: Kombinácia technickej analýzy, ATR volatility a pamäte titulov."
+                text: "24/7 Cloud TURBO V4: Páka 5x, Pákové ETF rakety, Auto-Compounding a rýchla rotácia kapitálu."
             }
         ]
     },
     settings: {
         executionMode: "simulator",
         marketHoursMode: "extended",
-        maxPosEur: 25.00,
-        maxPositions: 4,
-        watchlist: "NVDA,AAPL,TSLA,MSFT,AMD,META,AMZN,GOOGL,PLTR,COIN",
+        leverage: 5,
+        maxPosEur: 33.00,
+        maxPositions: 3,
+        watchlist: "SOXL,TQQQ,NVDL,TSLL,NVDA,TSLA,AMD,SMCI,COIN,MSTR,PLTR",
         brokerKey: "",
         brokerSecret: ""
     }
@@ -218,13 +222,28 @@ async function loadInitialState() {
                 const cloudState = JSON.parse(content);
                 if ((cloudState.learning?.generation || 0) >= (serverState.learning?.generation || 0)) {
                     serverState = Object.assign({}, DEFAULT_STATE, cloudState);
-                    fs.writeFileSync(STATE_FILE, JSON.stringify(serverState), "utf8");
                     console.log("[STATE] Restored latest state from GitHub Gist. Gen #" + (serverState.learning?.generation || 1));
                 }
             }
         } catch (e) {
             console.warn("[STATE] Gist load warning:", e.message);
         }
+    }
+
+    // Upgrade pre-V4 state to V4 Turbo Leverage automatically
+    if (!serverState.version || serverState.version < 4) {
+        serverState.version = 4;
+        serverState.settings = Object.assign({}, DEFAULT_STATE.settings, serverState.settings, { leverage: 5 });
+        serverState.packs = Object.assign({}, serverState.packs, { leveraged: true, sp500: false });
+        serverState.includeCrypto = true;
+        serverState.learning.trailingTriggerPct = 0.55;
+        serverState.learning.trailingDistancePct = 0.30;
+        for (const p of (serverState.portfolio?.positions || [])) {
+            if (!p.leverage) p.leverage = 5;
+            if (!p.openedTimestamp) p.openedTimestamp = Date.now();
+        }
+        saveServerState(serverState);
+        console.log("[STATE] Upgraded cloud state to V4 Turbo (5x Leverage + Leveraged ETFs + Fast Rotation).");
     }
 }
 
@@ -323,6 +342,7 @@ function computeATR(candles, period = 14) {
 function getServerWatchlist() {
     const set = new Set();
     const packs = serverState.packs || DEFAULT_STATE.packs;
+    if (packs.leveraged) MARKET_PACKS.leveraged.forEach(s => set.add(s));
     if (packs.tech) MARKET_PACKS.tech.forEach(s => set.add(s));
     if (packs.movers) MARKET_PACKS.movers.forEach(s => set.add(s));
     if (packs.sp500) MARKET_PACKS.sp500.forEach(s => set.add(s));
@@ -407,6 +427,10 @@ async function backgroundHeadlessTick() {
 
         const positions = serverState.portfolio?.positions || [];
         let changed = false;
+        const defaultLev = Number(serverState.settings?.leverage || 5);
+        const topUnheld = Object.values(marketMap)
+            .filter(m => !positions.some(p => p.symbol === m.symbol))
+            .sort((a, b) => b.aiScore - a.aiScore)[0];
 
         // 1. Evaluate open positions
         for (let i = positions.length - 1; i >= 0; i--) {
@@ -414,15 +438,19 @@ async function backgroundHeadlessTick() {
             const mkt = marketMap[pos.symbol];
             if (!mkt || !mkt.price) continue;
 
+            const lev = Number(pos.leverage || defaultLev);
             pos.currentPriceUsd = mkt.price;
             if (mkt.price > (pos.highPriceUsd || pos.entryPriceUsd)) {
                 pos.highPriceUsd = mkt.price;
                 changed = true;
             }
 
-            const pnlPct = ((pos.currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
-            if (pnlPct >= (serverState.learning.trailingTriggerPct || 1.2)) {
-                const newTrail = pos.highPriceUsd * (1 - (serverState.learning.trailingDistancePct || 0.8) / 100);
+            const rawPnlPct = ((pos.currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+            const levPnlPct = (rawPnlPct * lev) - 0.15;
+            const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+
+            if (peakRawPct >= (serverState.learning.trailingTriggerPct || 0.55)) {
+                const newTrail = pos.highPriceUsd * (1 - (serverState.learning.trailingDistancePct || 0.30) / 100);
                 if (newTrail > pos.stopLossUsd) {
                     pos.stopLossUsd = Number(newTrail.toFixed(4));
                     pos.trailingActive = true;
@@ -431,19 +459,21 @@ async function backgroundHeadlessTick() {
             }
 
             let sellReason = null;
+            const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
+
             if (pos.currentPriceUsd <= pos.stopLossUsd) {
-                sellReason = pos.trailingActive ? "24/7 Cloud Trailing Stop zasiahnutý" : "24/7 Cloud ATR Stop-Loss zasiahnutý";
+                sellReason = pos.trailingActive ? `24/7 Cloud Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
             } else if (pos.currentPriceUsd >= pos.takeProfitUsd) {
-                sellReason = `24/7 Cloud Take-Profit (+${pnlPct.toFixed(2)}%) dosiahnutý!`;
-            } else if (mkt.aiScore <= -30) {
+                sellReason = `24/7 Cloud TURBO Take-Profit (+${levPnlPct.toFixed(2)}%)!`;
+            } else if (mkt.aiScore <= -22) {
                 sellReason = `24/7 Cloud Obrat AI signálu (${mkt.aiScore})`;
+            } else if (ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 18) {
+                sellReason = `⚡ 24/7 Rýchla rotácia: presun zo stagnujúceho ${pos.symbol} do rakety ${topUnheld.symbol}`;
             }
 
             if (sellReason) {
-                const grossUsd = pos.shares * pos.currentPriceUsd;
-                const netEur = (grossUsd / (serverState.fxRateEurUsd || 1.08)) * (1 - 0.0015);
-                const pnlEur = netEur - pos.investedEur;
-                const realizedPct = (pnlEur / pos.investedEur) * 100;
+                const pnlEur = pos.investedEur * (levPnlPct / 100);
+                const netEur = Math.max(0.01, pos.investedEur + pnlEur);
 
                 positions.splice(i, 1);
                 serverState.portfolio.cashEur = Number((serverState.portfolio.cashEur + netEur).toFixed(2));
@@ -452,26 +482,34 @@ async function backgroundHeadlessTick() {
 
                 serverState.portfolio.closedTrades.unshift({
                     id: pos.id,
-                    symbol: pos.symbol,
+                    symbol: `${pos.symbol} (${lev}x)`,
                     investedEur: pos.investedEur,
                     entryPriceUsd: pos.entryPriceUsd,
                     exitPriceUsd: pos.currentPriceUsd,
                     pnlEur: Number(pnlEur.toFixed(2)),
-                    pnlPct: Number(realizedPct.toFixed(2)),
+                    pnlPct: Number(levPnlPct.toFixed(2)),
                     openedAt: pos.openedAt,
                     closedAt: new Date().toLocaleTimeString("sk-SK"),
                     exitReason: sellReason,
-                    lesson: `Cloud 24/7 Exekúcia (Gen #${serverState.learning.generation})`
+                    lesson: `Cloud 24/7 TURBO Exekúcia (Gen #${serverState.learning.generation})`
                 });
                 if (serverState.portfolio.closedTrades.length > 100) serverState.portfolio.closedTrades.pop();
                 changed = true;
             }
         }
 
-        // 2. Evaluate new autonomous entries if cash and slots available
-        const maxPositions = Number(serverState.settings?.maxPositions) || 4;
-        const maxPosEur = Number(serverState.settings?.maxPosEur) || 25;
-        const threshold = serverState.learning?.minScoreThreshold || 28;
+        // 2. Evaluate new autonomous entries with Auto-Compounding
+        const maxPositions = Number(serverState.settings?.maxPositions) || 3;
+        const threshold = serverState.learning?.minScoreThreshold || 26;
+
+        let openValEur = 0;
+        for (const p of positions) {
+            const l = Number(p.leverage || defaultLev);
+            const rPct = ((p.currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
+            openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - 0.15) / 100)));
+        }
+        const totalEquityEur = serverState.portfolio.cashEur + openValEur;
+        const compoundedPosEur = Math.max(Number(serverState.settings?.maxPosEur) || 25, Number((totalEquityEur / maxPositions).toFixed(2)));
 
         if (positions.length < maxPositions && serverState.portfolio.cashEur >= 5.0) {
             const candidates = Object.values(marketMap)
@@ -480,27 +518,30 @@ async function backgroundHeadlessTick() {
 
             for (const cand of candidates) {
                 if (positions.length >= maxPositions || serverState.portfolio.cashEur < 5.0) break;
-                const amountEur = Math.min(maxPosEur, serverState.portfolio.cashEur);
+                const amountEur = Math.min(compoundedPosEur, serverState.portfolio.cashEur);
                 if (amountEur < 5.0) break;
 
                 const netEur = amountEur * (1 - 0.0015);
-                const shares = (netEur * (serverState.fxRateEurUsd || 1.08)) / cand.price;
+                const shares = ((netEur * (serverState.fxRateEurUsd || 1.08)) * defaultLev) / cand.price;
+                const slPct = defaultLev >= 5 ? Math.min(1.5, cand.slPct) : cand.slPct;
 
                 positions.push({
                     id: "pos_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
                     symbol: cand.symbol,
+                    leverage: defaultLev,
                     shares,
                     investedEur: Number(amountEur.toFixed(2)),
                     entryPriceUsd: cand.price,
                     currentPriceUsd: cand.price,
                     highPriceUsd: cand.price,
-                    stopLossUsd: Number((cand.price * (1 - cand.slPct / 100)).toFixed(4)),
+                    stopLossUsd: Number((cand.price * (1 - slPct / 100)).toFixed(4)),
                     takeProfitUsd: Number((cand.price * (1 + cand.tpPct / 100)).toFixed(4)),
-                    dynamicSlPct: cand.slPct,
+                    dynamicSlPct: slPct,
                     dynamicTpPct: cand.tpPct,
                     trailingActive: false,
                     openedAt: new Date().toLocaleTimeString("sk-SK"),
-                    reason: `24/7 Cloud AI +${cand.aiScore} | RSI ${cand.rsi} | ATR SL -${cand.slPct}%`,
+                    openedTimestamp: Date.now(),
+                    reason: `⚡ ${defaultLev}x Páka | AI +${cand.aiScore} | RSI ${cand.rsi}`,
                     entryFactors: cand.factors
                 });
                 serverState.portfolio.cashEur = Number((serverState.portfolio.cashEur - amountEur).toFixed(2));
