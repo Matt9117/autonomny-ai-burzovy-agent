@@ -4,6 +4,9 @@
 // ============================================================================
 
 const MARKET_PACKS = {
+    leveraged: [
+        "SOXL", "TQQQ", "NVDL", "TSLL", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "FNGU"
+    ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
         "PLTR", "ARM", "SMCI", "MU", "INTC", "QCOM", "ASML", "ORCL", "CRM", "ADBE"
@@ -26,13 +29,14 @@ const MARKET_PACKS = {
 };
 
 const DEFAULT_STATE = {
-    version: 3,
+    version: 4,
     agentActive: true,
-    includeCrypto: false,
+    includeCrypto: true,
     packs: {
+        leveraged: true,
         tech: true,
         movers: true,
-        sp500: true,
+        sp500: false,
         etf: false
     },
     selectedSymbol: "NVDA",
@@ -46,13 +50,13 @@ const DEFAULT_STATE = {
     learning: {
         generation: 1,
         totalTrainedTrades: 0,
-        minScoreThreshold: 28,
-        stopLossPct: 1.8,
-        takeProfitPct: 3.2,
-        slAtrMultiplier: 2.4,
-        tpAtrMultiplier: 4.5,
-        trailingTriggerPct: 1.2,
-        trailingDistancePct: 0.8,
+        minScoreThreshold: 26,
+        stopLossPct: 1.2,
+        takeProfitPct: 2.5,
+        slAtrMultiplier: 1.8,
+        tpAtrMultiplier: 3.6,
+        trailingTriggerPct: 0.55,
+        trailingDistancePct: 0.30,
         weights: {
             rsi: 22,       // % weight
             trend: 26,     // % weight (EMA9/21 + VWAP)
@@ -60,21 +64,22 @@ const DEFAULT_STATE = {
             volume: 14,    // % weight
             sentiment: 18  // % weight (Live News & Analyst sentiment)
         },
-        tickerMemory: {}, // symbol -> { trades, wins, losses, totalPnlPct, avgPnlPct, winRate, reputationBonus, bestFactor, factorScores: {rsi,trend,macd,volume} }
+        tickerMemory: {},
         lessons: [
             {
                 time: new Date().toLocaleTimeString("sk-SK"),
                 gen: 1,
-                text: "Inicializácia neurónových váh (Gen #1): Vyvážená kombinácia technickej analýzy, ATR volatility a pamäte titulov."
+                text: "TURBO V4 Aktivovaný: Páka 5x, Pákové ETF rakety, Auto-Compounding a rýchla rotácia kapitálu smerom k cieľu 500 €."
             }
         ]
     },
     settings: {
         executionMode: "simulator",
         marketHoursMode: "extended",
-        maxPosEur: 25.00,
-        maxPositions: 4,
-        watchlist: "NVDA,AAPL,TSLA,MSFT,AMD,META,AMZN,GOOGL,PLTR,COIN",
+        leverage: 5,
+        maxPosEur: 33.00,
+        maxPositions: 3,
+        watchlist: "SOXL,TQQQ,NVDL,TSLL,NVDA,TSLA,AMD,SMCI,COIN,MSTR,PLTR",
         brokerKey: "",
         brokerSecret: ""
     }
@@ -150,6 +155,7 @@ async function loadStateFromServer() {
         const res = await fetch("/api/state");
         const data = await res.json();
         if (data && data.version) {
+            const wasPreV4 = (data.version < 4);
             state = Object.assign({}, DEFAULT_STATE, data);
             state.packs = Object.assign({}, DEFAULT_STATE.packs, data.packs);
             state.portfolio = Object.assign({}, DEFAULT_STATE.portfolio, data.portfolio);
@@ -157,7 +163,23 @@ async function loadStateFromServer() {
             state.learning.weights = Object.assign({}, DEFAULT_STATE.learning.weights, data.learning?.weights);
             state.learning.tickerMemory = Object.assign({}, data.learning?.tickerMemory || {});
             state.settings = Object.assign({}, DEFAULT_STATE.settings, data.settings);
-            addLog(`Pamäť načítaná: Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Gen #${state.learning.generation}, Natrénovaných obchodov: ${state.learning.totalTrainedTrades || 0}.`, "success");
+
+            if (wasPreV4) {
+                state.version = 4;
+                state.settings.leverage = 5;
+                state.packs.leveraged = true;
+                state.packs.sp500 = false;
+                state.includeCrypto = true;
+                state.learning.trailingTriggerPct = 0.55;
+                state.learning.trailingDistancePct = 0.30;
+                // Upgrade existing open positions to 5x Turbo leverage
+                for (const p of state.portfolio.positions) {
+                    if (!p.leverage) p.leverage = 5;
+                    if (!p.openedTimestamp) p.openedTimestamp = Date.now();
+                }
+                await saveStateToServer();
+            }
+            addLog(`⚡ TURBO V4 Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -701,6 +723,7 @@ async function fetchAllNews() {
 function getActiveWatchlist() {
     const set = new Set();
     const packs = state.packs || DEFAULT_STATE.packs;
+    if (packs.leveraged) MARKET_PACKS.leveraged.forEach(s => set.add(s));
     if (packs.tech) MARKET_PACKS.tech.forEach(s => set.add(s));
     if (packs.movers) MARKET_PACKS.movers.forEach(s => set.add(s));
     if (packs.sp500) MARKET_PACKS.sp500.forEach(s => set.add(s));
@@ -715,6 +738,32 @@ function getActiveWatchlist() {
             .forEach(s => set.add(s));
     }
     return Array.from(set);
+}
+
+// Helper to calculate leveraged position value & P&L in EUR
+function getPositionValuation(pos, currentPriceUsd) {
+    const lev = Number(pos.leverage || state.settings.leverage || 5);
+    const rawPct = ((currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+    const leveragedPct = (rawPct * lev) - 0.15; // includes 0.15% FX spread
+    const pnlEur = pos.investedEur * (leveragedPct / 100);
+    const currentValEur = Math.max(0.01, pos.investedEur + pnlEur);
+    return {
+        leverage: lev,
+        rawPct,
+        leveragedPct,
+        pnlEur,
+        currentValEur
+    };
+}
+
+function getTotalPortfolioEquityEur() {
+    let openVal = 0;
+    for (const pos of state.portfolio.positions) {
+        const mkt = marketCache[pos.symbol];
+        const pUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
+        openVal += getPositionValuation(pos, pUsd).currentValEur;
+    }
+    return state.portfolio.cashEur + openVal;
 }
 
 async function runMarketCycle() {
@@ -770,6 +819,11 @@ function evaluateOpenPositions() {
         return;
     }
 
+    // Find best currently available unheld rocket for Opportunity Swap check
+    const topUnheldCandidate = Object.values(marketCache)
+        .filter(m => !state.portfolio.positions.some(p => p.symbol === m.symbol))
+        .sort((a, b) => b.aiScore - a.aiScore)[0];
+
     const currentPositions = [...state.portfolio.positions];
     for (const pos of currentPositions) {
         const mkt = marketCache[pos.symbol];
@@ -780,16 +834,22 @@ function evaluateOpenPositions() {
             pos.highPriceUsd = mkt.price;
         }
 
-        const pnlPct = ((pos.currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+        const valObj = getPositionValuation(pos, pos.currentPriceUsd);
+        const rawPnlPct = valObj.rawPct;
+        const levPnlPct = valObj.leveragedPct;
 
-        // 1. Check Trailing Stop activation & update
-        if (pnlPct >= state.learning.trailingTriggerPct) {
-            const newTrailStop = pos.highPriceUsd * (1 - state.learning.trailingDistancePct / 100);
+        // 1. Check Fast Trailing Stop activation & update
+        const triggerPct = state.learning.trailingTriggerPct || 0.55;
+        const distPct = state.learning.trailingDistancePct || 0.30;
+        const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+
+        if (peakRawPct >= triggerPct) {
+            const newTrailStop = pos.highPriceUsd * (1 - distPct / 100);
             if (newTrailStop > pos.stopLossUsd) {
                 pos.stopLossUsd = Math.round(newTrailStop * 10000) / 10000;
                 if (!pos.trailingActive) {
                     pos.trailingActive = true;
-                    addLog(`🔒 [${pos.symbol}] Aktivovaný Trailing Stop! Stop-Loss posunutý na ochranu zisku (${pos.stopLossUsd.toFixed(2)} $).`, "info");
+                    addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný Rýchly Trailing Stop pri zisku +${levPnlPct.toFixed(2)}% (${pos.stopLossUsd.toFixed(2)} $).`, "info");
                 }
             }
         }
@@ -797,21 +857,28 @@ function evaluateOpenPositions() {
         // 2. Check Stop-Loss / Trailing Stop hit
         if (pos.currentPriceUsd <= pos.stopLossUsd) {
             const reason = pos.trailingActive
-                ? `Trailing Stop zasiahnutý na ${pos.currentPriceUsd.toFixed(2)} $ (uzamknutý zisk)`
-                : `Ochranný ATR Stop-Loss zasiahnutý na ${pos.currentPriceUsd.toFixed(2)} $`;
+                ? `Trailing Stop zasiahnutý (${valObj.leverage}x zisk uzamknutý)`
+                : `Ochranný ATR Stop-Loss zasiahnutý (${valObj.leverage}x)`;
             executeSellPosition(pos.id, reason);
             continue;
         }
 
         // 3. Check Take-Profit target hit
         if (pos.currentPriceUsd >= pos.takeProfitUsd) {
-            executeSellPosition(pos.id, `Cieľový ATR Take-Profit (+${pnlPct.toFixed(2)} %) dosiahnutý!`);
+            executeSellPosition(pos.id, `Cieľový TURBO Take-Profit (+${levPnlPct.toFixed(2)} %) dosiahnutý!`);
             continue;
         }
 
         // 4. Check AI Signal Reversal
-        if (mkt.aiScore <= -30) {
-            executeSellPosition(pos.id, `Obrat AI signálu do záporu (Skóre ${mkt.aiScore}, RSI ${mkt.rsi})`);
+        if (mkt.aiScore <= -22) {
+            executeSellPosition(pos.id, `Obrat AI signálu do záporu (Skóre ${mkt.aiScore})`);
+            continue;
+        }
+
+        // 5. Fast Capital Rotation (Opportunity Swap if stagnant > 15 mins and much stronger rocket exists)
+        const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
+        if (ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 18 && topUnheldCandidate.aiScore >= state.learning.minScoreThreshold + 8) {
+            executeSellPosition(pos.id, `⚡ Rýchla rotácia kapitálu: ${pos.symbol} stagnuje, presúvam kapitál do rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
             continue;
         }
     }
@@ -819,7 +886,7 @@ function evaluateOpenPositions() {
 
 function evaluateNewEntries() {
     const sessionInfo = getMarketSessionInfo();
-    const maxPositions = Number(state.settings.maxPositions) || 4;
+    const maxPositions = Number(state.settings.maxPositions) || 3;
     if (state.portfolio.positions.length >= maxPositions) return;
     if (state.portfolio.cashEur < 5.0) return;
 
@@ -832,12 +899,15 @@ function evaluateNewEntries() {
         })
         .sort((a, b) => b.aiScore - a.aiScore);
 
+    // Auto-Compounding: dynamically scale position size as total account equity grows toward 500 €!
+    const totalEquity = getTotalPortfolioEquityEur();
+    const compoundedPosSize = Math.max(Number(state.settings.maxPosEur) || 25, Math.round((totalEquity / maxPositions) * 100) / 100);
+
     for (const cand of candidates) {
         if (state.portfolio.positions.length >= maxPositions) break;
         if (state.portfolio.cashEur < 5.0) break;
 
-        const maxPosEur = Number(state.settings.maxPosEur) || 25;
-        const desiredEur = Math.min(maxPosEur, state.portfolio.cashEur);
+        const desiredEur = Math.min(compoundedPosSize, state.portfolio.cashEur);
         if (desiredEur < 5.0) break;
 
         executeBuyPosition(cand, desiredEur);
@@ -848,28 +918,31 @@ async function executeBuyPosition(mkt, amountEur) {
     const priceUsd = mkt.price;
     if (!priceUsd || priceUsd <= 0) return;
 
+    const lev = Number(state.settings.leverage || 5);
     const fxFeeEur = amountEur * 0.0015;
     const netInvestedEur = amountEur - fxFeeEur;
     const amountUsd = netInvestedEur * state.fxRateEurUsd;
-    const shares = amountUsd / priceUsd;
+    const shares = (amountUsd * lev) / priceUsd;
 
-    // Use dynamic ATR-based Stop-Loss & Take-Profit tailored to this stock's volatility
-    const slPct = mkt.dynamicSlPct || state.learning.stopLossPct || 1.8;
-    const tpPct = mkt.dynamicTpPct || state.learning.takeProfitPct || 3.2;
+    // Tighter stop-loss when using high leverage so risk stays controlled
+    const baseSlPct = mkt.dynamicSlPct || state.learning.stopLossPct || 1.4;
+    const baseTpPct = mkt.dynamicTpPct || state.learning.takeProfitPct || 2.8;
+    const slPct = lev >= 10 ? Math.min(1.0, baseSlPct) : (lev >= 5 ? Math.min(1.5, baseSlPct) : baseSlPct);
+    const tpPct = baseTpPct;
 
     const slUsd = Math.round(priceUsd * (1 - slPct / 100) * 10000) / 10000;
     const tpUsd = Math.round(priceUsd * (1 + tpPct / 100) * 10000) / 10000;
 
-    const reasonParts = [`AI +${mkt.aiScore}`];
+    const reasonParts = [`⚡ ${lev}x Páka`, `AI +${mkt.aiScore}`];
     if (mkt.reputationBonus) {
         reasonParts.push(`Pamäť ${mkt.reputationBonus > 0 ? "+" : ""}${mkt.reputationBonus}b`);
     }
     reasonParts.push(`RSI ${mkt.rsi}`);
-    reasonParts.push(`ATR SL -${slPct}%`);
 
     const newPos = {
         id: "pos_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
         symbol: mkt.symbol,
+        leverage: lev,
         shares: shares,
         investedEur: Math.round(amountEur * 100) / 100,
         entryPriceUsd: priceUsd,
@@ -881,6 +954,7 @@ async function executeBuyPosition(mkt, amountEur) {
         dynamicTpPct: tpPct,
         trailingActive: false,
         openedAt: new Date().toLocaleTimeString("sk-SK"),
+        openedTimestamp: Date.now(),
         reason: reasonParts.join(" | "),
         entryFactors: { ...mkt.factors }
     };
@@ -888,7 +962,7 @@ async function executeBuyPosition(mkt, amountEur) {
     state.portfolio.cashEur = Math.round((state.portfolio.cashEur - amountEur) * 100) / 100;
     state.portfolio.positions.push(newPos);
 
-    addLog(`🟢 NÁKUP [${mkt.symbol}]: Vložené ${amountEur.toFixed(2)} € (${shares.toFixed(4)} ks @ ${priceUsd.toFixed(2)} $). ${newPos.reason}`, "success");
+    addLog(`🟢 TURBO NÁKUP [${mkt.symbol} @ ${lev}x]: Vklad ${amountEur.toFixed(2)} € (Expozícia ${(amountEur * lev).toFixed(0)} € @ ${priceUsd.toFixed(2)} $). ${newPos.reason}`, "success");
 
     if (state.settings.executionMode !== "simulator" && state.settings.brokerKey) {
         forwardOrderToBroker(mkt.symbol, "buy", amountUsd);
@@ -906,12 +980,10 @@ async function executeSellPosition(posId, exitReason) {
     const mkt = marketCache[pos.symbol];
     const exitPriceUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
 
-    const grossValueUsd = pos.shares * exitPriceUsd;
-    const grossValueEur = grossValueUsd / state.fxRateEurUsd;
-    const netReturnedEur = grossValueEur * (1 - 0.0015);
-
-    const pnlEur = netReturnedEur - pos.investedEur;
-    const pnlPct = (pnlEur / pos.investedEur) * 100;
+    const valObj = getPositionValuation(pos, exitPriceUsd);
+    const netReturnedEur = valObj.currentValEur;
+    const pnlEur = valObj.pnlEur;
+    const pnlPct = valObj.leveragedPct;
 
     state.portfolio.positions.splice(idx, 1);
     state.portfolio.cashEur = Math.round((state.portfolio.cashEur + netReturnedEur) * 100) / 100;
@@ -920,7 +992,7 @@ async function executeSellPosition(posId, exitReason) {
 
     const closedRecord = {
         id: pos.id,
-        symbol: pos.symbol,
+        symbol: `${pos.symbol} (${valObj.leverage}x)`,
         investedEur: pos.investedEur,
         entryPriceUsd: pos.entryPriceUsd,
         exitPriceUsd: exitPriceUsd,
@@ -937,11 +1009,11 @@ async function executeSellPosition(posId, exitReason) {
         state.portfolio.closedTrades.pop();
     }
 
-    const emoji = pnlEur >= 0 ? "💰 ZISK" : "🔻 STRATA";
-    addLog(`${emoji} PREDAJ [${pos.symbol}] @ ${exitPriceUsd.toFixed(2)} $: Výsledok ${pnlEur >= 0 ? "+" : ""}${pnlEur.toFixed(2)} € (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)} %). Dôvod: ${exitReason}`, pnlEur >= 0 ? "success" : "warn");
+    const emoji = pnlEur >= 0 ? "💰 TURBO ZISK" : "🔻 STRATA";
+    addLog(`${emoji} PREDAJ [${pos.symbol} ${valObj.leverage}x] @ ${exitPriceUsd.toFixed(2)} $: Výsledok ${pnlEur >= 0 ? "+" : ""}${pnlEur.toFixed(2)} € (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)} %). Dôvod: ${exitReason}`, pnlEur >= 0 ? "success" : "warn");
 
     if (state.settings.executionMode !== "simulator" && state.settings.brokerKey) {
-        forwardOrderToBroker(pos.symbol, "sell", grossValueUsd);
+        forwardOrderToBroker(pos.symbol, "sell", pos.investedEur * state.fxRateEurUsd);
     }
 
     await saveStateToServer();
@@ -1100,8 +1172,8 @@ function renderKpis() {
     for (const pos of state.portfolio.positions) {
         const mkt = marketCache[pos.symbol];
         const priceUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
-        const valEur = (pos.shares * priceUsd) / state.fxRateEurUsd;
-        openPositionsValueEur += valEur;
+        const valObj = getPositionValuation(pos, priceUsd);
+        openPositionsValueEur += valObj.currentValEur;
         investedEurTotal += pos.investedEur;
     }
 
@@ -1113,6 +1185,13 @@ function renderKpis() {
     const pnlEl = document.getElementById("kpiTotalPnl");
     pnlEl.textContent = `${totalPnlEur >= 0 ? "+" : ""}${totalPnlEur.toFixed(2)} €`;
     pnlEl.className = totalPnlEur >= 0 ? "text-green" : "text-red";
+
+    // Goal 500 € progress bar (from 100 € to 500 € = +400 € target)
+    const goalProgressPct = Math.min(100, Math.max(1, ((totalEquityEur - 100) / 400) * 100));
+    const goalLbl = document.getElementById("goalProgressLabel");
+    const goalBar = document.getElementById("goalProgressBar");
+    if (goalLbl) goalLbl.textContent = `Cieľ 500 €: ${Math.max(0, ((totalEquityEur / 500) * 100)).toFixed(1)}%`;
+    if (goalBar) goalBar.style.width = `${goalProgressPct}%`;
 
     const badgeEl = document.getElementById("totalPnlBadge");
     badgeEl.textContent = `${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)} %`;
@@ -1258,9 +1337,9 @@ function renderPositionsTable() {
     const rows = positions.map(pos => {
         const mkt = marketCache[pos.symbol];
         const currUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
-        const currValEur = ((pos.shares * currUsd) / state.fxRateEurUsd) * (1 - 0.0015);
-        const pnlEur = currValEur - pos.investedEur;
-        const pnlPct = (pnlEur / pos.investedEur) * 100;
+        const valObj = getPositionValuation(pos, currUsd);
+        const pnlEur = valObj.pnlEur;
+        const pnlPct = valObj.leveragedPct;
         totalOpenPnlEur += pnlEur;
 
         const pnlClass = pnlEur >= 0 ? "text-green" : "text-red";
@@ -1269,7 +1348,8 @@ function renderPositionsTable() {
             <tr>
                 <td>
                     <strong class="ticker-symbol" style="cursor:pointer;" onclick="selectSymbol('${pos.symbol}')">${pos.symbol}</strong>
-                    <div class="text-muted" style="font-size:11px;">${pos.shares.toFixed(4)} ks</div>
+                    <span class="badge badge-warn" style="font-size:9px;padding:1px 4px;margin-left:3px;">${valObj.leverage}x</span>
+                    <div class="text-muted" style="font-size:11px;">Expozícia: ${(pos.investedEur * valObj.leverage).toFixed(0)} €</div>
                 </td>
                 <td><strong>${pos.investedEur.toFixed(2)} €</strong></td>
                 <td>
@@ -1595,6 +1675,7 @@ function toggleCryptoTickers() {
 
 function toggleMarketPacks() {
     state.packs = {
+        leveraged: !!document.getElementById("packLeveraged")?.checked,
         tech: !!document.getElementById("packTech")?.checked,
         movers: !!document.getElementById("packMovers")?.checked,
         sp500: !!document.getElementById("packSp500")?.checked,
@@ -1603,6 +1684,19 @@ function toggleMarketPacks() {
     saveStateToServer();
     addLog(`📡 Aktualizovaný zoznam balíkov trhov (${getActiveWatchlist().length} titulov). Spúšťam paralelný sken...`, "info");
     runMarketCycle();
+}
+
+function changeLeverageMode() {
+    const sel = document.getElementById("leverageSelect");
+    const lev = Number(sel?.value || 5);
+    state.settings.leverage = lev;
+    // Also update active positions leverage so user sees immediate effect
+    for (const p of state.portfolio.positions) {
+        p.leverage = lev;
+    }
+    saveStateToServer();
+    renderAll();
+    addLog(`⚡ Finančná páka prepnutá na ${lev}x (zisky aj straty sa násobia ${lev}x).`, "info");
 }
 
 function runCycleNow() {
@@ -1641,10 +1735,12 @@ function syncUiFromState() {
 
     document.getElementById("chkIncludeCrypto").checked = !!state.includeCrypto;
     const packs = state.packs || DEFAULT_STATE.packs;
+    if (document.getElementById("packLeveraged")) document.getElementById("packLeveraged").checked = !!packs.leveraged;
     if (document.getElementById("packTech")) document.getElementById("packTech").checked = !!packs.tech;
     if (document.getElementById("packMovers")) document.getElementById("packMovers").checked = !!packs.movers;
     if (document.getElementById("packSp500")) document.getElementById("packSp500").checked = !!packs.sp500;
     if (document.getElementById("packEtf")) document.getElementById("packEtf").checked = !!packs.etf;
+    if (document.getElementById("leverageSelect")) document.getElementById("leverageSelect").value = String(state.settings.leverage || 5);
 
     const modeBadge = document.getElementById("modeBadge");
     const modeMap = {
