@@ -576,7 +576,28 @@ const server = http.createServer(async (req, res) => {
 
     try {
         if (pathname === "/api/ping") {
-            return sendJson({ ok: true, status: "alive", generation: serverState.learning?.generation, timestamp: Date.now() });
+            return sendJson({ ok: true, status: "alive", version: 4, generation: serverState.learning?.generation, timestamp: Date.now() });
+        }
+
+        if (pathname === "/api/self-update") {
+            // Pulls latest index.html, app.js, styles.css directly from GitHub main branch!
+            const rawBase = "https://raw.githubusercontent.com/Matt9117/autonomny-ai-burzovy-agent/main";
+            for (const f of ["index.html", "app.js", "styles.css"]) {
+                const parsed = url.parse(`${rawBase}/${f}?t=${Date.now()}`);
+                await new Promise((resolve) => {
+                    https.get({ hostname: parsed.hostname, path: parsed.path, headers: { "User-Agent": "AI-Agent" } }, (r) => {
+                        let data = "";
+                        r.on("data", c => data += c);
+                        r.on("end", () => {
+                            if (r.statusCode === 200 && data.length > 100) {
+                                fs.writeFileSync(path.join(ROOT_DIR, f), data, "utf8");
+                            }
+                            resolve();
+                        });
+                    }).on("error", () => resolve());
+                });
+            }
+            return sendJson({ ok: true, updated: true, timestamp: Date.now() });
         }
 
         if (pathname === "/api/market" || pathname === "/api/history") {
