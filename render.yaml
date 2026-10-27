@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: autonomny-ai-burzovy-agent
+    env: node
+    plan: free
+    buildCommand: "echo Build complete"
+    startCommand: "node cloud_server.js"
+    envVars:
+      - key: NODE_ENV
+        value: production
