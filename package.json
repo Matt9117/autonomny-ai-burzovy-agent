@@ -1,0 +1,12 @@
+{
+  "name": "autonomny-ai-burzovy-agent",
+  "version": "3.0.0",
+  "description": "24/7 Autonomous AI Stock & Crypto Trading Agent with Self-Learning Memory",
+  "main": "cloud_server.js",
+  "scripts": {
+    "start": "node cloud_server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
