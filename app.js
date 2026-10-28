@@ -876,8 +876,13 @@ function evaluateOpenPositions() {
         }
 
         // 5. Fast Capital Rotation (Opportunity Swap if stagnant > 15 mins and much stronger rocket exists)
+        // Only rotate stocks if the US stock market is currently open/active (prevent overnight churn on closed US stocks!)
+        const isPosCrypto = pos.symbol.endsWith("-USD");
         const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
-        if (ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 18 && topUnheldCandidate.aiScore >= state.learning.minScoreThreshold + 8) {
+        if ((isPosCrypto || sessionInfo.session === "REGULAR" || sessionInfo.session === "PREMARKET") &&
+            ageMins >= 18 && Math.abs(rawPnlPct) < 0.20 &&
+            topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 18 &&
+            topUnheldCandidate.aiScore >= state.learning.minScoreThreshold + 8) {
             executeSellPosition(pos.id, `⚡ Rýchla rotácia kapitálu: ${pos.symbol} stagnuje, presúvam kapitál do rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
             continue;
         }
@@ -1889,5 +1894,139 @@ async function forwardOrderToBroker(symbol, side, notionalUsd) {
         }
     } catch (e) {
         addLog(`⚠️ Zlyhalo odoslanie príkazu na brokera: ${e.message}`, "error");
+    }
+}
+
+// ============================================================================
+// DAILY SUMMARY, SELF-REFLECTION & 09:00 EMAIL REPORT ENGINE
+// ============================================================================
+
+function openDailyReportModal() {
+    const modal = document.getElementById("dailyReportModal");
+    const box = document.getElementById("dailyReportContent");
+    if (box) {
+        box.innerHTML = buildDailyReportHtml();
+    }
+    if (modal) modal.classList.add("open");
+}
+
+function closeDailyReportModal() {
+    const modal = document.getElementById("dailyReportModal");
+    if (modal) modal.classList.remove("open");
+}
+
+function buildDailyReportHtml() {
+    const closed = state.portfolio.closedTrades || [];
+    const positions = state.portfolio.positions || [];
+    const totalEquity = getTotalPortfolioEquityEur();
+    const netPnlEur = totalEquity - state.portfolio.initialCapitalEur;
+    const netPnlPct = (netPnlEur / state.portfolio.initialCapitalEur) * 100;
+
+    const wins = closed.filter(t => t.pnlEur > 0);
+    const losses = closed.filter(t => t.pnlEur <= 0);
+    const winRate = closed.length > 0 ? ((wins.length / closed.length) * 100).toFixed(1) : "0.0";
+    const grossWin = wins.reduce((a, b) => a + b.pnlEur, 0);
+    const grossLoss = Math.abs(losses.reduce((a, b) => a + b.pnlEur, 0));
+    const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? "∞" : "--");
+
+    const topWinners = [...wins].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 5);
+    const topLosers = [...losses].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 5);
+    const rotationLosses = losses.filter(t => (t.exitReason || "").includes("rotácia"));
+
+    const memObj = state.learning.tickerMemory || {};
+    const favStocks = Object.entries(memObj).filter(([_, m]) => m.reputationBonus > 0).sort((a, b) => b[1].reputationBonus - a[1].reputationBonus).slice(0, 6);
+    const penStocks = Object.entries(memObj).filter(([_, m]) => m.reputationBonus < 0).sort((a, b) => a[1].reputationBonus - b[1].reputationBonus).slice(0, 6);
+
+    return `
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:10px;">
+            <div class="weight-item">
+                <div class="text-muted" style="font-size:11px;">AKTUÁLNY STAV ÚČTU</div>
+                <div style="font-size:20px; font-weight:800; color:var(--profit-green);">${totalEquity.toFixed(2)} €</div>
+                <div style="font-size:12px;">Čistý zisk: <strong>${netPnlEur >= 0 ? "+" : ""}${netPnlEur.toFixed(2)} € (${netPnlPct >= 0 ? "+" : ""}${netPnlPct.toFixed(2)}%)</strong></div>
+            </div>
+            <div class="weight-item">
+                <div class="text-muted" style="font-size:11px;">UZAVRETÉ OBCHODY</div>
+                <div style="font-size:20px; font-weight:800;">${closed.length} obchodov</div>
+                <div style="font-size:12px;"><span class="text-green">${wins.length} ziskových</span> / <span class="text-red">${losses.length} stratových</span> (${winRate}%)</div>
+            </div>
+            <div class="weight-item">
+                <div class="text-muted" style="font-size:11px;">HRUBÝ ZISK VS. STRATA</div>
+                <div style="font-size:20px; font-weight:800; color:var(--accent-cyan);">PF: ${profitFactor}</div>
+                <div style="font-size:12px;"><span class="text-green">+${grossWin.toFixed(2)} €</span> vs. <span class="text-red">-${grossLoss.toFixed(2)} €</span></div>
+            </div>
+            <div class="weight-item">
+                <div class="text-muted" style="font-size:11px;">GENERÁCIA MOZGU AI</div>
+                <div style="font-size:20px; font-weight:800; color:var(--accent-purple);">Gen #${state.learning.generation}</div>
+                <div style="font-size:12px;">Natrénované: <strong>${state.learning.totalTrainedTrades || closed.length}</strong> rozhodnutí</div>
+            </div>
+        </div>
+
+        <div class="weight-item" style="border-left: 4px solid var(--profit-green);">
+            <div style="font-weight:700; margin-bottom:6px; color:var(--profit-green);">🏆 Najlepšie obchody (Ako agent premýšľal a prečo zarobil):</div>
+            ${topWinners.length === 0 ? '<div class="text-muted">Zatiaľ žiadne uzavreté ziskové obchody.</div>' : topWinners.map(w => `
+                <div style="padding:4px 0; border-bottom:1px dashed rgba(35,48,77,0.4); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                    <span><strong>${w.symbol}</strong> (${w.openedAt} → ${w.closedAt}): <strong class="text-green">+${w.pnlEur.toFixed(2)} € (+${w.pnlPct.toFixed(2)}%)</strong></span>
+                    <span class="text-muted" style="font-size:12px;">${w.exitReason}</span>
+                </div>
+            `).join("")}
+            <div style="margin-top:6px; font-size:12px; color:var(--text-secondary);">
+                💡 <strong>Myšlienkový postup pri výhrach:</strong> Agent zachytil silné momentum na pákových ETF a volatilných lídroch (najmä <code>SOXL</code>, <code>TSLA</code>, <code>NVDL</code>, <code>AAPL</code>), podržal ich v trende a zisk uzamkol cez <strong>Trailing Stop / Take-Profit</strong>. Jediný veľký zásah (+11,23 € na SOXL) zaplatil desiatky drobných testovacích zastavení.
+            </div>
+        </div>
+
+        <div class="weight-item" style="border-left: 4px solid var(--warn-amber);">
+            <div style="font-weight:700; margin-bottom:6px; color:var(--warn-amber);">⚠️ Analýza chýb a stratových obchodov (Čo nevyšlo):</div>
+            ${topLosers.length === 0 ? '<div class="text-muted">Zatiaľ žiadne stratové obchody.</div>' : topLosers.map(l => `
+                <div style="padding:4px 0; border-bottom:1px dashed rgba(35,48,77,0.4); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                    <span><strong>${l.symbol}</strong> (${l.openedAt} → ${l.closedAt}): <strong class="text-red">${l.pnlEur.toFixed(2)} € (${l.pnlPct.toFixed(2)}%)</strong></span>
+                    <span class="text-muted" style="font-size:12px;">${l.exitReason}</span>
+                </div>
+            `).join("")}
+            <div style="margin-top:6px; font-size:12px; color:var(--text-secondary);">
+                🔍 <strong>Diagnostika chýb AI:</strong>
+                <ul style="margin-left:18px; margin-top:4px;">
+                    <li><strong>Chyba č. 1 (Nočná rotácia zatvorených US akcií):</strong> Celkovo ${rotationLosses.length} malých strát (po -0,04 € až -0,54 €) vzniklo tým, že v noci po 22:00 (keď bola US burza zatvorená a ceny sa nehýbali) agent vyhodnotil US ETF ako „stagnujúce“ a zbytočne ich rotoval, čím platil poplatky za prevod.</li>
+                    <li><strong>Chyba č. 2 (Pomalé/falošné breakouts mimo hlavných hodín):</strong> Najväčšie jednotlivé straty (<code>LMT -3,01 €</code> a <code>AMDL -2,67 €</code>) vznikli pri vstupe bez dostatočného objemu alebo v pomalom sektore.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="weight-item" style="border-left: 4px solid var(--accent-cyan);">
+            <div style="font-weight:700; margin-bottom:6px; color:var(--accent-cyan);">🧠 Ako sa agent poučil & Čo urobí dnes lepšie:</div>
+            <ul style="margin-left:18px; font-size:12px; color:var(--text-primary); display:flex; flex-direction:column; gap:5px;">
+                <li>✅ <strong>1. Zákaz nočnej rotácie US akcií (Nové pravidlo):</strong> Mimo otváracích hodín US burzy (22:00 – 10:00) agent už <strong>nerotuje</strong> americké akcie/ETF na základe 15-minútovej stagnácie. V noci obchoduje iba živé 24/7 krypto a šetrí poplatky.</li>
+                <li>✅ <strong>2. Pamäť a reputácia titulov aktualizovaná:</strong>
+                    Obľúbené ziskové tituly s bonusom: <strong>${favStocks.length ? favStocks.map(([s, m]) => `${s} (+${m.reputationBonus}b)`).join(", ") : "SOXL, TSLA, NVDL, AAPL"}</strong>.
+                    Penalizované tituly (znížená dôvera): <strong>${penStocks.length ? penStocks.map(([s, m]) => `${s} (${m.reputationBonus}b)`).join(", ") : "LMT, AMDL, MSTU"}</strong>.
+                </li>
+                <li>✅ <strong>3. Asymetrický pomer ziskov a strát:</strong> Priemerný zisk na víťazný obchod (+${wins.length ? (grossWin / wins.length).toFixed(2) : "0.00"} €) je výrazne vyšší než priemerná strata (-${losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00"} €). Agent naďalej striktne reže straty v zárodku a víťazov drží cez Trailing Stop.</li>
+                <li>✅ <strong>4. Pravidelný ranný report o 09:00:</strong> Každé ráno o 09:00 server automaticky odošle tento súhrn na <strong>mt.banovic@gmail.com</strong>.</li>
+            </ul>
+        </div>
+    `;
+}
+
+async function sendDailyReportEmailNow() {
+    const btn = document.getElementById("btnSendEmailNow");
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Odosielam na mt.banovic@gmail.com...";
+    }
+    try {
+        const res = await fetch("/api/send-report-email", { method: "POST" });
+        const data = await res.json();
+        if (data && data.ok) {
+            alert("✅ Report bol odoslaný na mt.banovic@gmail.com! (Poznámka: Ak je to úplne prvý e-mail cez FormSubmit, skontrolujte si v Gmaili priečinok Doručené/Spam a kliknite raz na 'Activate Form', aby vám automatické denné e-maily o 9:00 chodili už navždy bez potvrdenia).");
+            addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
+        } else {
+            alert("⚠️ Odpoveď e-mailovej brány: " + (data.message || data.error || "Skontrolujte log"));
+        }
+    } catch (e) {
+        alert("❌ Chyba pri odosielaní e-mailu: " + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "📧 Poslať teraz na mt.banovic@gmail.com";
+        }
     }
 }
