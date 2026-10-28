@@ -7,6 +7,10 @@ const MARKET_PACKS = {
     leveraged: [
         "SOXL", "SOXS", "TQQQ", "SQQQ", "NVDL", "TSLL", "TSLS", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "SPXS", "FNGU"
     ],
+    eu: [
+        "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "AIR.PA",
+        "CBK.DE", "DBK.DE", "ADS.DE", "MBG.DE", "BMW.DE", "DTE.DE", "ALV.DE"
+    ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
         "PLTR", "ARM", "SMCI", "MU", "INTC", "QCOM", "ASML", "ORCL", "CRM", "ADBE"
@@ -28,12 +32,17 @@ const MARKET_PACKS = {
     ]
 };
 
+function isEuStock(symbol) {
+    return /\.(DE|AS|PA|MC|MI|L)$/i.test(String(symbol || ""));
+}
+
 const DEFAULT_STATE = {
     version: 4,
     agentActive: true,
     includeCrypto: true,
     packs: {
         leveraged: true,
+        eu: true,
         tech: true,
         movers: true,
         sp500: false,
@@ -240,35 +249,46 @@ function getMarketSessionInfo() {
     const mins = nyDate.getMinutes();
     const totalMins = hours * 60 + mins;
 
+    const skTimeStr = now.toLocaleString("en-US", { timeZone: "Europe/Bratislava" });
+    const skDate = new Date(skTimeStr);
+    const skDay = skDate.getDay();
+    const skTotalMins = skDate.getHours() * 60 + skDate.getMinutes();
+
     const isWeekend = (day === 0 || day === 6);
+    const isSkWeekend = (skDay === 0 || skDay === 6);
+    const canTradeEu = (!isSkWeekend && skTotalMins >= 540 && skTotalMins < 1050) || (state.settings.marketHoursMode === "always"); // 09:00 - 17:30 CET
+
     let session = "CLOSED";
-    let label = "US Burza zatvorená";
+    let label = "🌙 Nočná smena (24/7 Krypto)";
     let canTradeStocks = false;
     let isNearCloseEod = false;
 
     if (!isWeekend) {
         if (totalMins >= 570 && totalMins < 960) {
             session = "REGULAR";
-            label = "🟢 US Burza OTVORENÁ (Hlavné obchodovanie)";
+            label = canTradeEu
+                ? "🟢 EÚ XETRA + 🇺🇸 US Wall Street OTVORENÉ"
+                : "🟢 🇺🇸 US Burza OTVORENÁ (Hlavné obchodovanie)";
             canTradeStocks = true;
             if (totalMins >= 954) isNearCloseEod = true;
-        } else if (totalMins >= 240 && totalMins < 570) {
-            session = "PREMARKET";
-            const minsToOpen = 570 - totalMins;
-            const h = Math.floor(minsToOpen / 60);
-            const m = minsToOpen % 60;
-            label = `🟡 Pre-Market (Hlavná burza otvorí o ${h}h ${m}m)`;
-            canTradeStocks = (state.settings.marketHoursMode !== "strict_us");
+        } else if (canTradeEu) {
+            session = "EU_OPEN";
+            const minsToUsOpen = 570 - totalMins;
+            const h = Math.floor(Math.max(0, minsToUsOpen) / 60);
+            const m = Math.max(0, minsToUsOpen) % 60;
+            label = `🟢 🇩🇪 Európa XETRA OTVORENÁ (0% FX) | 🇺🇸 US otvorí o ${h}h ${m}m`;
+            // Block sleepy US Pre-Market gaps before 15:30; trade full-liquidity EU stocks + Crypto instead!
+            canTradeStocks = (state.settings.marketHoursMode === "always");
         } else if (totalMins >= 960 && totalMins < 1200) {
             session = "AFTERHOURS";
-            label = "🟡 After-Hours (Poobchodná fáza)";
-            canTradeStocks = (state.settings.marketHoursMode !== "strict_us");
+            label = "🟡 US After-Hours + 🪙 24/7 Krypto";
+            canTradeStocks = false;
         } else {
-            label = "⚪ Mimo obchodných hodín US burzy";
+            label = "🌙 Nočná smena – 🪙 24/7 Krypto aktívne";
             canTradeStocks = (state.settings.marketHoursMode === "always");
         }
     } else {
-        label = "⚪ Víkend – US akciová burza zatvorená";
+        label = "⚪ Víkend – 🪙 24/7 Krypto smena";
         canTradeStocks = (state.settings.marketHoursMode === "always");
     }
 
@@ -276,6 +296,7 @@ function getMarketSessionInfo() {
         session,
         label,
         canTradeStocks,
+        canTradeEu,
         isNearCloseEod,
         nyTimeFormatted: nyDate.toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" })
     };
@@ -769,6 +790,7 @@ function getActiveWatchlist() {
     const set = new Set();
     const packs = state.packs || DEFAULT_STATE.packs;
     if (packs.leveraged) MARKET_PACKS.leveraged.forEach(s => set.add(s));
+    if (packs.eu !== false) MARKET_PACKS.eu.forEach(s => set.add(s));
     if (packs.tech) MARKET_PACKS.tech.forEach(s => set.add(s));
     if (packs.movers) MARKET_PACKS.movers.forEach(s => set.add(s));
     if (packs.sp500) MARKET_PACKS.sp500.forEach(s => set.add(s));
@@ -789,7 +811,8 @@ function getActiveWatchlist() {
 function getPositionValuation(pos, currentPriceUsd) {
     const lev = Number(pos.leverage || state.settings.leverage || 5);
     const rawPct = ((currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
-    const leveragedPct = (rawPct * lev) - 0.15; // includes 0.15% FX spread
+    const feePct = isEuStock(pos.symbol) ? 0.02 : 0.15; // 0% FX fee on EUR-denominated European stocks!
+    const leveragedPct = (rawPct * lev) - feePct;
     const pnlEur = pos.investedEur * (leveragedPct / 100);
     const currentValEur = Math.max(0.01, pos.investedEur + pnlEur);
     return {
@@ -953,7 +976,9 @@ function evaluateNewEntries() {
         .filter(m => {
             if (state.portfolio.positions.some(p => p.symbol === m.symbol)) return false;
             const isCrypto = m.symbol.endsWith("-USD");
-            if (!isCrypto && !sessionInfo.canTradeStocks) return false;
+            const isEu = isEuStock(m.symbol);
+            if (isEu && !sessionInfo.canTradeEu) return false;
+            if (!isCrypto && !isEu && !sessionInfo.canTradeStocks) return false;
             return m.aiScore >= state.learning.minScoreThreshold;
         })
         .sort((a, b) => b.aiScore - a.aiScore);
@@ -988,9 +1013,10 @@ async function executeBuyPosition(mkt, amountEur) {
     if (!priceUsd || priceUsd <= 0) return;
 
     const lev = Number(state.settings.leverage || 5);
-    const fxFeeEur = amountEur * 0.0015;
+    const isEu = isEuStock(mkt.symbol);
+    const fxFeeEur = isEu ? (amountEur * 0.0002) : (amountEur * 0.0015);
     const netInvestedEur = amountEur - fxFeeEur;
-    const amountUsd = netInvestedEur * state.fxRateEurUsd;
+    const amountUsd = isEu ? netInvestedEur : (netInvestedEur * state.fxRateEurUsd);
     const shares = (amountUsd * lev) / priceUsd;
 
     // Tighter stop-loss when using high leverage so risk stays controlled
@@ -1002,7 +1028,7 @@ async function executeBuyPosition(mkt, amountEur) {
     const slUsd = Math.round(priceUsd * (1 - slPct / 100) * 10000) / 10000;
     const tpUsd = Math.round(priceUsd * (1 + tpPct / 100) * 10000) / 10000;
 
-    const reasonParts = [`⚡ ${lev}x Páka`, `AI +${mkt.aiScore}`];
+    const reasonParts = [isEu ? `🇩🇪 EUR 0% FX` : `⚡ ${lev}x Páka`, `AI +${mkt.aiScore}`];
     if (mkt.reputationBonus) {
         reasonParts.push(`Pamäť ${mkt.reputationBonus > 0 ? "+" : ""}${mkt.reputationBonus}b`);
     }
@@ -1031,7 +1057,8 @@ async function executeBuyPosition(mkt, amountEur) {
     state.portfolio.cashEur = Math.round((state.portfolio.cashEur - amountEur) * 100) / 100;
     state.portfolio.positions.push(newPos);
 
-    addLog(`🟢 TURBO NÁKUP [${mkt.symbol} @ ${lev}x]: Vklad ${amountEur.toFixed(2)} € (Expozícia ${(amountEur * lev).toFixed(0)} € @ ${priceUsd.toFixed(2)} $). ${newPos.reason}`, "success");
+    const currSign = isEu ? "€" : "$";
+    addLog(`🟢 TURBO NÁKUP [${mkt.symbol} @ ${lev}x]: Vklad ${amountEur.toFixed(2)} € (Expozícia ${(amountEur * lev).toFixed(0)} € @ ${priceUsd.toFixed(2)} ${currSign}). ${newPos.reason}`, "success");
 
     if (state.settings.executionMode !== "simulator" && state.settings.brokerKey) {
         forwardOrderToBroker(mkt.symbol, "buy", amountUsd);
@@ -1047,7 +1074,11 @@ async function executeSellPosition(posId, exitReason) {
 
     const pos = state.portfolio.positions[idx];
     const mkt = marketCache[pos.symbol];
-    const exitPriceUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
+    let exitPriceUsd = (mkt && mkt.price) ? mkt.price : pos.currentPriceUsd;
+    // Prevent price-gap slippage from turning a locked-in Break-Even / Trailing Stop into a negative trade
+    if (pos.trailingActive && pos.stopLossUsd > pos.entryPriceUsd && exitPriceUsd < pos.stopLossUsd) {
+        exitPriceUsd = pos.stopLossUsd;
+    }
 
     const valObj = getPositionValuation(pos, exitPriceUsd);
     const netReturnedEur = valObj.currentValEur;
@@ -1745,6 +1776,7 @@ function toggleCryptoTickers() {
 function toggleMarketPacks() {
     state.packs = {
         leveraged: !!document.getElementById("packLeveraged")?.checked,
+        eu: !!document.getElementById("packEu")?.checked,
         tech: !!document.getElementById("packTech")?.checked,
         movers: !!document.getElementById("packMovers")?.checked,
         sp500: !!document.getElementById("packSp500")?.checked,
@@ -1805,6 +1837,7 @@ function syncUiFromState() {
     document.getElementById("chkIncludeCrypto").checked = !!state.includeCrypto;
     const packs = state.packs || DEFAULT_STATE.packs;
     if (document.getElementById("packLeveraged")) document.getElementById("packLeveraged").checked = !!packs.leveraged;
+    if (document.getElementById("packEu")) document.getElementById("packEu").checked = (packs.eu !== false);
     if (document.getElementById("packTech")) document.getElementById("packTech").checked = !!packs.tech;
     if (document.getElementById("packMovers")) document.getElementById("packMovers").checked = !!packs.movers;
     if (document.getElementById("packSp500")) document.getElementById("packSp500").checked = !!packs.sp500;
