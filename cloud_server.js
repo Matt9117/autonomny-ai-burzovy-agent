@@ -39,6 +39,10 @@ const MARKET_PACKS = {
     leveraged: [
         "SOXL", "SOXS", "TQQQ", "SQQQ", "NVDL", "TSLL", "TSLS", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "SPXS", "FNGU"
     ],
+    eu: [
+        "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "AIR.PA",
+        "CBK.DE", "DBK.DE", "ADS.DE", "MBG.DE", "BMW.DE", "DTE.DE", "ALV.DE"
+    ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
         "PLTR", "ARM", "SMCI", "MU", "INTC", "QCOM", "ASML", "ORCL", "CRM", "ADBE"
@@ -58,11 +62,15 @@ const MARKET_PACKS = {
     ]
 };
 
+function isEuStock(sym) {
+    return /\.(DE|AS|PA|MC|MI|L)$/i.test(String(sym || ""));
+}
+
 const DEFAULT_STATE = {
     version: 4,
     agentActive: true,
     includeCrypto: true,
-    packs: { leveraged: true, tech: true, movers: true, sp500: false, etf: false },
+    packs: { leveraged: true, eu: true, tech: true, movers: true, sp500: false, etf: false },
     selectedSymbol: "NVDA",
     fxRateEurUsd: 1.08,
     portfolio: {
@@ -343,6 +351,7 @@ function getServerWatchlist() {
     const set = new Set();
     const packs = serverState.packs || DEFAULT_STATE.packs;
     if (packs.leveraged) MARKET_PACKS.leveraged.forEach(s => set.add(s));
+    if (packs.eu !== false) MARKET_PACKS.eu.forEach(s => set.add(s));
     if (packs.tech) MARKET_PACKS.tech.forEach(s => set.add(s));
     if (packs.movers) MARKET_PACKS.movers.forEach(s => set.add(s));
     if (packs.sp500) MARKET_PACKS.sp500.forEach(s => set.add(s));
@@ -353,6 +362,19 @@ function getServerWatchlist() {
     }
     for (const p of (serverState.portfolio?.positions || [])) set.add(p.symbol);
     return Array.from(set);
+}
+
+function isEuMarketOpen() {
+    try {
+        const skStr = new Date().toLocaleString("en-US", { timeZone: "Europe/Bratislava", hour12: false });
+        const skDate = new Date(skStr);
+        const day = skDate.getDay();
+        if (day === 0 || day === 6) return false;
+        const mins = skDate.getHours() * 60 + skDate.getMinutes();
+        return mins >= (9 * 60) && mins < (17 * 60 + 30); // 09:00 - 17:30 CET (XETRA / Euronext)
+    } catch {
+        return true;
+    }
 }
 
 function isUsRegularSession() {
@@ -564,7 +586,13 @@ async function backgroundHeadlessTick() {
 
     try {
         syncTickerMemoryFromTrades();
-        const usOpen = isUsMarketOpen();
+        const usOpen = isUsRegularSession();
+        const euOpen = isEuMarketOpen();
+        const canTradeSymbol = (sym) => {
+            if (sym.endsWith("-USD")) return true;
+            if (isEuStock(sym)) return euOpen;
+            return usOpen;
+        };
         const symbols = getServerWatchlist();
         const marketMap = {};
         const batchSize = 15;
@@ -582,7 +610,7 @@ async function backgroundHeadlessTick() {
         let changed = false;
         const defaultLev = Number(serverState.settings?.leverage || 5);
         const topUnheld = Object.values(marketMap)
-            .filter(m => !positions.some(p => p.symbol === m.symbol) && (m.symbol.endsWith("-USD") || usOpen))
+            .filter(m => !positions.some(p => p.symbol === m.symbol) && canTradeSymbol(m.symbol))
             .sort((a, b) => b.aiScore - a.aiScore)[0];
 
         // 1. Evaluate open positions
@@ -592,7 +620,8 @@ async function backgroundHeadlessTick() {
             if (!mkt || !mkt.price) continue;
 
             const isCryptoPos = pos.symbol.endsWith("-USD");
-            const canRotatePos = isCryptoPos || usOpen;
+            const isEuPos = isEuStock(pos.symbol);
+            const canRotatePos = canTradeSymbol(pos.symbol);
 
             const lev = Number(pos.leverage || defaultLev);
             pos.currentPriceUsd = mkt.price;
@@ -601,8 +630,9 @@ async function backgroundHeadlessTick() {
                 changed = true;
             }
 
+            const feePct = isEuPos ? 0.02 : 0.15;
             const rawPnlPct = ((pos.currentPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
-            const levPnlPct = (rawPnlPct * lev) - 0.15;
+            const levPnlPct = (rawPnlPct * lev) - feePct;
             const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
 
             // V5 3-Tier Progressive Trailing Stop:
@@ -642,7 +672,13 @@ async function backgroundHeadlessTick() {
             }
 
             if (sellReason) {
-                const pnlEur = pos.investedEur * (levPnlPct / 100);
+                let fillExitPrice = pos.currentPriceUsd;
+                if (pos.trailingActive && pos.stopLossUsd > pos.entryPriceUsd && fillExitPrice < pos.stopLossUsd) {
+                    fillExitPrice = pos.stopLossUsd;
+                }
+                const fillRawPct = ((fillExitPrice - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+                const fillLevPct = (fillRawPct * lev) - feePct;
+                const pnlEur = pos.investedEur * (fillLevPct / 100);
                 const netEur = Math.max(0.01, pos.investedEur + pnlEur);
 
                 positions.splice(i, 1);
@@ -655,9 +691,9 @@ async function backgroundHeadlessTick() {
                     symbol: `${pos.symbol} (${lev}x)`,
                     investedEur: pos.investedEur,
                     entryPriceUsd: pos.entryPriceUsd,
-                    exitPriceUsd: pos.currentPriceUsd,
+                    exitPriceUsd: fillExitPrice,
                     pnlEur: Number(pnlEur.toFixed(2)),
-                    pnlPct: Number(levPnlPct.toFixed(2)),
+                    pnlPct: Number(fillLevPct.toFixed(2)),
                     openedAt: pos.openedAt,
                     closedAt: new Date().toLocaleTimeString("sk-SK"),
                     exitReason: sellReason,
@@ -677,14 +713,15 @@ async function backgroundHeadlessTick() {
         for (const p of positions) {
             const l = Number(p.leverage || defaultLev);
             const rPct = ((p.currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
-            openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - 0.15) / 100)));
+            const pFee = isEuStock(p.symbol) ? 0.02 : 0.15;
+            openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - pFee) / 100)));
         }
         const totalEquityEur = serverState.portfolio.cashEur + openValEur;
         const basePosEur = Math.max(Number(serverState.settings?.maxPosEur) || 25, Number((totalEquityEur / maxPositions).toFixed(2)));
 
         if (positions.length < maxPositions && serverState.portfolio.cashEur >= 5.0) {
             const candidates = Object.values(marketMap)
-                .filter(m => !positions.some(p => p.symbol === m.symbol) && m.aiScore >= threshold && (m.symbol.endsWith("-USD") || usOpen))
+                .filter(m => !positions.some(p => p.symbol === m.symbol) && m.aiScore >= threshold && canTradeSymbol(m.symbol))
                 .sort((a, b) => b.aiScore - a.aiScore);
 
             for (const cand of candidates) {
@@ -704,8 +741,9 @@ async function backgroundHeadlessTick() {
                 const amountEur = Math.min(targetEur, serverState.portfolio.cashEur);
                 if (amountEur < 5.0) break;
 
-                const netEur = amountEur * (1 - 0.0015);
-                const shares = ((netEur * (serverState.fxRateEurUsd || 1.08)) * defaultLev) / cand.price;
+                const isEuCand = isEuStock(cand.symbol);
+                const netEur = amountEur * (1 - (isEuCand ? 0.0002 : 0.0015));
+                const shares = ((netEur * (isEuCand ? 1.0 : (serverState.fxRateEurUsd || 1.08))) * defaultLev) / cand.price;
                 const slPct = defaultLev >= 5 ? Math.min(1.5, cand.slPct) : cand.slPct;
 
                 positions.push({
