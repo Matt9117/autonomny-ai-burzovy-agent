@@ -633,12 +633,12 @@ async function backgroundHeadlessTick() {
                 sellReason = pos.trailingActive ? `24/7 Cloud V5 Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
             } else if (pos.currentPriceUsd >= pos.takeProfitUsd) {
                 sellReason = `24/7 Cloud TURBO Take-Profit (+${levPnlPct.toFixed(2)}%)!`;
-            } else if (canRotatePos && mkt.aiScore <= -22) {
-                sellReason = `24/7 Cloud Obrat AI signálu (${mkt.aiScore})`;
-            } else if (usRegular && isCryptoPos && ageMins >= 12 && Math.abs(rawPnlPct) < 0.35 && topUnheld && !topUnheld.symbol.endsWith("-USD") && topUnheld.aiScore >= 46) {
-                sellReason = `🔔 US Opening Bell Boost: presun z pomalého krypta ${pos.symbol} do US rakety ${topUnheld.symbol}`;
-            } else if (canRotatePos && ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 18) {
-                sellReason = `⚡ 24/7 Rýchla rotácia: presun zo stagnujúceho ${pos.symbol} do rakety ${topUnheld.symbol}`;
+            } else if (canRotatePos && mkt.aiScore <= -38) {
+                sellReason = `24/7 Cloud Silný obrat AI trendu (${mkt.aiScore})`;
+            } else if (levPnlPct >= 0.05 && usRegular && isCryptoPos && ageMins >= 20 && levPnlPct < 2.0 && topUnheld && !topUnheld.symbol.endsWith("-USD") && topUnheld.aiScore >= 52) {
+                sellReason = `🔔 US Opening Bell Boost (v pluse): presun z krypta ${pos.symbol} do US rakety ${topUnheld.symbol}`;
+            } else if (levPnlPct >= 0.05 && canRotatePos && ageMins >= 35 && levPnlPct < 1.5 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 25 && topUnheld.aiScore >= 55) {
+                sellReason = `⚡ 24/7 Zisková rotácia: presun z ${pos.symbol} do rakety ${topUnheld.symbol}`;
             }
 
             if (sellReason) {
