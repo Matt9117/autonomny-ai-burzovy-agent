@@ -397,6 +397,7 @@ function scoreServerCandles(mkt) {
     return {
         symbol: mkt.symbol,
         price,
+        marketState: mkt.marketState || "REGULAR",
         rsi: Math.round(rsi * 10) / 10,
         slPct,
         tpPct,
@@ -406,12 +407,121 @@ function scoreServerCandles(mkt) {
     };
 }
 
+function isUsMarketOpen() {
+    try {
+        const nyStr = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false });
+        const nyDate = new Date(nyStr);
+        const day = nyDate.getDay();
+        if (day === 0 || day === 6) return false;
+        const mins = nyDate.getHours() * 60 + nyDate.getMinutes();
+        return mins >= 4 * 60 && mins <= 16 * 60; // 04:00 - 16:00 ET (Premarket + Regular)
+    } catch {
+        return true;
+    }
+}
+
+function syncTickerMemoryFromTrades() {
+    if (!serverState.learning) serverState.learning = {};
+    if (!serverState.learning.tickerMemory) serverState.learning.tickerMemory = {};
+    const closed = serverState.portfolio?.closedTrades || [];
+    const grouped = {};
+    for (const t of closed) {
+        const cleanSym = String(t.symbol || "").replace(/\s*\(\d+x\)/i, "").trim();
+        if (!cleanSym) continue;
+        if (!grouped[cleanSym]) grouped[cleanSym] = { trades: 0, wins: 0, totalPnlPct: 0, totalPnlEur: 0 };
+        grouped[cleanSym].trades += 1;
+        if (t.pnlEur >= 0) grouped[cleanSym].wins += 1;
+        grouped[cleanSym].totalPnlPct += Number(t.pnlPct || 0);
+        grouped[cleanSym].totalPnlEur += Number(t.pnlEur || 0);
+    }
+    for (const [sym, g] of Object.entries(grouped)) {
+        const avgPnlPct = Number((g.totalPnlPct / g.trades).toFixed(2));
+        const winRate = g.wins / g.trades;
+        let rep = Math.round((winRate - 0.45) * 28 + (avgPnlPct * 0.6));
+        rep = Math.max(-18, Math.min(18, rep));
+        serverState.learning.tickerMemory[sym] = {
+            trades: g.trades,
+            wins: g.wins,
+            avgPnlPct,
+            reputationBonus: rep,
+            bestFactor: serverState.learning.tickerMemory[sym]?.bestFactor || "trend"
+        };
+    }
+}
+
+function sendDailyEmailReport(recipientEmail = "mt.banovic@gmail.com") {
+    return new Promise((resolve) => {
+        try {
+            syncTickerMemoryFromTrades();
+            const closed = serverState.portfolio?.closedTrades || [];
+            const positions = serverState.portfolio?.positions || [];
+            const defaultLev = Number(serverState.settings?.leverage || 10);
+            let openValEur = 0;
+            for (const p of positions) {
+                const l = Number(p.leverage || defaultLev);
+                const rPct = ((p.currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
+                openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - 0.15) / 100)));
+            }
+            const totalEquity = Number(((serverState.portfolio?.cashEur || 0) + openValEur).toFixed(2));
+            const netProfit = Number((totalEquity - 100).toFixed(2));
+            const wins = closed.filter(t => t.pnlEur >= 0);
+            const losses = closed.filter(t => t.pnlEur < 0);
+            const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 3);
+            const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
+
+            const payload = JSON.stringify({
+                _subject: `📊 Denný AI Burzový Report (09:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`,
+                _template: "table",
+                _captcha: "false",
+                "Dátum a Čas (Bratislava)": new Date().toLocaleString("sk-SK", { timeZone: "Europe/Bratislava" }),
+                "Celková Hodnota Portfólia": `${totalEquity.toFixed(2)} € (Štart: 100.00 € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
+                "Hotovosť / Otvorené Pozície": `Hotovosť: ${(serverState.portfolio?.cashEur || 0).toFixed(2)} € | Otvorené: ${positions.map(p => `${p.symbol} (${p.leverage || defaultLev}x)`).join(", ") || "Žiadne"}`,
+                "Bilancia Obchodov": `Spolu: ${closed.length} obchodov | Výhry: ${wins.length} | Straty: ${losses.length} | Generácia AI: #${serverState.learning?.generation || 1}`,
+                "TOP Výherné Obchody": sortedBest.map(t => `${t.symbol}: +${t.pnlEur.toFixed(2)} € (+${t.pnlPct.toFixed(2)}%) [${t.exitReason}]`).join(" | ") || "Zatiaľ žiadne",
+                "Najväčšie Chyby / Straty": sortedWorst.map(t => `${t.symbol}: ${t.pnlEur.toFixed(2)} € (${t.pnlPct.toFixed(2)}%) [${t.exitReason}]`).join(" | ") || "Žiadne",
+                "Sebareflexia a Zlepšenia": "1) Zákaz nočnej rotácie zmrazených US akcií mimo hodín NYSE/NASDAQ (22:00-10:00 SEČ). 2) Posilnený reputačný bonus pre SOXL, TSLA, AAPL, NVDL. 3) Penalizácia pomalých titulov LMT a AMDL."
+            });
+
+            const req = https.request({
+                hostname: "formsubmit.co",
+                path: `/ajax/${encodeURIComponent(recipientEmail)}`,
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Origin": "https://autonomny-ai-burzovy-agent.onrender.com",
+                    "Referer": "https://autonomny-ai-burzovy-agent.onrender.com/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    "Content-Length": Buffer.byteLength(payload)
+                }
+            }, (res) => {
+                let data = "";
+                res.on("data", c => data += c);
+                res.on("end", () => {
+                    try {
+                        resolve({ ok: true, response: JSON.parse(data) });
+                    } catch {
+                        resolve({ ok: true, raw: data });
+                    }
+                });
+            });
+            req.on("error", (err) => resolve({ ok: false, error: err.message }));
+            req.write(payload);
+            req.end();
+        } catch (e) {
+            resolve({ ok: false, error: e.message });
+        }
+    });
+}
+
 let isWorkerRunning = false;
 async function backgroundHeadlessTick() {
     if (!serverState.agentActive || isWorkerRunning) return;
     isWorkerRunning = true;
 
     try {
+        syncTickerMemoryFromTrades();
+        const usOpen = isUsMarketOpen();
         const symbols = getServerWatchlist();
         const marketMap = {};
         const batchSize = 15;
@@ -429,7 +539,7 @@ async function backgroundHeadlessTick() {
         let changed = false;
         const defaultLev = Number(serverState.settings?.leverage || 5);
         const topUnheld = Object.values(marketMap)
-            .filter(m => !positions.some(p => p.symbol === m.symbol))
+            .filter(m => !positions.some(p => p.symbol === m.symbol) && (m.symbol.endsWith("-USD") || usOpen))
             .sort((a, b) => b.aiScore - a.aiScore)[0];
 
         // 1. Evaluate open positions
@@ -437,6 +547,9 @@ async function backgroundHeadlessTick() {
             const pos = positions[i];
             const mkt = marketMap[pos.symbol];
             if (!mkt || !mkt.price) continue;
+
+            const isCryptoPos = pos.symbol.endsWith("-USD");
+            const canRotatePos = isCryptoPos || usOpen;
 
             const lev = Number(pos.leverage || defaultLev);
             pos.currentPriceUsd = mkt.price;
@@ -465,9 +578,9 @@ async function backgroundHeadlessTick() {
                 sellReason = pos.trailingActive ? `24/7 Cloud Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
             } else if (pos.currentPriceUsd >= pos.takeProfitUsd) {
                 sellReason = `24/7 Cloud TURBO Take-Profit (+${levPnlPct.toFixed(2)}%)!`;
-            } else if (mkt.aiScore <= -22) {
+            } else if (canRotatePos && mkt.aiScore <= -22) {
                 sellReason = `24/7 Cloud Obrat AI signálu (${mkt.aiScore})`;
-            } else if (ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 18) {
+            } else if (canRotatePos && ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 18) {
                 sellReason = `⚡ 24/7 Rýchla rotácia: presun zo stagnujúceho ${pos.symbol} do rakety ${topUnheld.symbol}`;
             }
 
@@ -494,6 +607,7 @@ async function backgroundHeadlessTick() {
                     lesson: `Cloud 24/7 TURBO Exekúcia (Gen #${serverState.learning.generation})`
                 });
                 if (serverState.portfolio.closedTrades.length > 100) serverState.portfolio.closedTrades.pop();
+                syncTickerMemoryFromTrades();
                 changed = true;
             }
         }
@@ -513,7 +627,7 @@ async function backgroundHeadlessTick() {
 
         if (positions.length < maxPositions && serverState.portfolio.cashEur >= 5.0) {
             const candidates = Object.values(marketMap)
-                .filter(m => !positions.some(p => p.symbol === m.symbol) && m.aiScore >= threshold)
+                .filter(m => !positions.some(p => p.symbol === m.symbol) && m.aiScore >= threshold && (m.symbol.endsWith("-USD") || usOpen))
                 .sort((a, b) => b.aiScore - a.aiScore);
 
             for (const cand of candidates) {
@@ -659,8 +773,15 @@ const server = http.createServer(async (req, res) => {
             }
         }
 
+        if (pathname === "/api/send-report-email") {
+            const email = parsedUrl.query.email || "mt.banovic@gmail.com";
+            const result = await sendDailyEmailReport(email);
+            return sendJson(result);
+        }
+
         if (pathname === "/api/state") {
             if (req.method === "GET") {
+                syncTickerMemoryFromTrades();
                 return sendJson(serverState);
             }
             if (req.method === "POST") {
@@ -706,6 +827,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 loadInitialState().then(() => {
+    syncTickerMemoryFromTrades();
     server.listen(PORT, () => {
         console.log(`============================================================`);
         console.log(`  24/7 CLOUD AI TRADING AGENT RUNNING ON PORT ${PORT}`);
@@ -714,6 +836,25 @@ loadInitialState().then(() => {
 
     // Run server-side 24/7 autonomous trading & learning loop every 45 seconds
     setInterval(backgroundHeadlessTick, 45000);
+
+    // Check every 60 seconds for 09:00 Europe/Bratislava daily email report to mt.banovic@gmail.com
+    setInterval(async () => {
+        try {
+            const skNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Bratislava" }));
+            const yyyy = skNow.getFullYear();
+            const mm = String(skNow.getMonth() + 1).padStart(2, "0");
+            const dd = String(skNow.getDate()).padStart(2, "0");
+            const todayStr = `${yyyy}-${mm}-${dd}`;
+            if (skNow.getHours() === 9 && serverState.lastEmailReportDate !== todayStr) {
+                serverState.lastEmailReportDate = todayStr;
+                saveServerState(serverState);
+                await sendDailyEmailReport("mt.banovic@gmail.com");
+                console.log(`[EMAIL REPORT] Daily 09:00 report sent to mt.banovic@gmail.com (${todayStr})`);
+            }
+        } catch (e) {
+            console.warn("[EMAIL REPORT] Scheduler warning:", e.message);
+        }
+    }, 60000);
 
     // Self-ping keep-alive on Render if RENDER_EXTERNAL_URL is present
     if (process.env.RENDER_EXTERNAL_URL) {
