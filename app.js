@@ -919,25 +919,25 @@ function evaluateOpenPositions() {
             continue;
         }
 
-        // 4. Check AI Signal Reversal
-        if (mkt.aiScore <= -22) {
-            executeSellPosition(pos.id, `Obrat AI signálu do záporu (Skóre ${mkt.aiScore})`);
+        // 4. Check AI Signal Reversal (only on severe multi-factor breakdown <= -38, preventing premature panic exits on 5m noise)
+        if (mkt.aiScore <= -38) {
+            executeSellPosition(pos.id, `Silný obrat AI trendu (Skóre ${mkt.aiScore})`);
             continue;
         }
 
-        // 5. Fast Capital Rotation & US Opening Bell Priority Boost
+        // 5. Profitable Capital Rotation & US Opening Bell Priority Boost (NEVER rotate at a loss! Must be >= +0.05% net profit)
         const isPosCrypto = pos.symbol.endsWith("-USD");
         const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
-        if (sessionInfo.session === "REGULAR" && isPosCrypto && ageMins >= 12 && Math.abs(rawPnlPct) < 0.35 &&
-            topUnheldCandidate && !topUnheldCandidate.symbol.endsWith("-USD") && topUnheldCandidate.aiScore >= 46) {
-            executeSellPosition(pos.id, `🔔 US Opening Bell Boost: uvoľňujem pomalé krypto ${pos.symbol} pre americkú raketu ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
+        if (levPnlPct >= 0.05 && sessionInfo.session === "REGULAR" && isPosCrypto && ageMins >= 20 && levPnlPct < 2.0 &&
+            topUnheldCandidate && !topUnheldCandidate.symbol.endsWith("-USD") && topUnheldCandidate.aiScore >= 52) {
+            executeSellPosition(pos.id, `🔔 US Opening Bell Boost (v pluse): presun z krypta ${pos.symbol} do US rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
             continue;
         }
-        if ((isPosCrypto || sessionInfo.session === "REGULAR" || sessionInfo.session === "PREMARKET") &&
-            ageMins >= 18 && Math.abs(rawPnlPct) < 0.20 &&
-            topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 18 &&
-            topUnheldCandidate.aiScore >= state.learning.minScoreThreshold + 8) {
-            executeSellPosition(pos.id, `⚡ Rýchla rotácia kapitálu: ${pos.symbol} stagnuje, presúvam kapitál do rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
+        if (levPnlPct >= 0.05 && (isPosCrypto || sessionInfo.session === "REGULAR") &&
+            ageMins >= 35 && levPnlPct < 1.5 &&
+            topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 25 &&
+            topUnheldCandidate.aiScore >= 55) {
+            executeSellPosition(pos.id, `⚡ Zisková rotácia kapitálu: ${pos.symbol} pomalý, presúvam do rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
             continue;
         }
     }
