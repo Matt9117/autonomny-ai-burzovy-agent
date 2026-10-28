@@ -179,12 +179,39 @@ async function loadStateFromServer() {
                 }
                 await saveStateToServer();
             }
-            addLog(`⚡ TURBO V4 Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Gen #${state.learning.generation}.`, "success");
+            replayHistoricalLogsFromState();
+            addLog(`🚀 V5 Hyper-Growth Aktívny (Páka ${state.settings.leverage || 10}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
     } catch (e) {
         console.warn("Nepodarilo sa načítať stav zo servera, používam predvolený:", e);
+    }
+}
+
+function replayHistoricalLogsFromState() {
+    const box = document.getElementById("agentLogConsole");
+    if (!box) return;
+    box.innerHTML = "";
+
+    const closed = (state.portfolio.closedTrades || []).slice(0, 15).reverse();
+    for (const t of closed) {
+        const isWin = t.pnlEur >= 0;
+        const sign = isWin ? "+" : "";
+        const isCloud = (t.exitReason || "").includes("24/7") || (t.lesson || "").includes("Cloud");
+        const srcTag = isCloud ? "☁️ 24/7 CLOUD" : "⚡ AI EXEKÚCIA";
+        const color = isWin ? "#10b981" : "#f59e0b";
+        const div = document.createElement("div");
+        div.className = "log-entry";
+        div.innerHTML = `<span class="log-time">[${t.closedAt || "--:--"}]</span> <span style="color:${color}">${srcTag} • Uzavretý <strong>${t.symbol}</strong> (otvorený ${t.openedAt}): <strong>${sign}${t.pnlEur.toFixed(2)} € (${sign}${t.pnlPct.toFixed(2)}%)</strong> | ${t.exitReason}</span>`;
+        box.prepend(div);
+    }
+
+    for (const p of (state.portfolio.positions || [])) {
+        const div = document.createElement("div");
+        div.className = "log-entry";
+        div.innerHTML = `<span class="log-time">[${p.openedAt || "--:--"}]</span> <span style="color:#38bdf8">🟢 OTVORENÁ POZÍCIA <strong>${p.symbol} (${p.leverage || 10}x)</strong>: Vklad ${p.investedEur.toFixed(2)} € @ ${p.entryPriceUsd.toFixed(2)} $ | Stop-Loss: ${p.stopLossUsd.toFixed(2)} $ | ${p.reason || ""}</span>`;
+        box.prepend(div);
     }
 }
 
@@ -2036,9 +2063,34 @@ function buildDailyReportHtml() {
                     Obľúbené ziskové tituly s bonusom: <strong>${favStocks.length ? favStocks.map(([s, m]) => `${s} (+${m.reputationBonus}b)`).join(", ") : "SOXL, TSLA, NVDL, AAPL"}</strong>.
                     Penalizované tituly (znížená dôvera): <strong>${penStocks.length ? penStocks.map(([s, m]) => `${s} (${m.reputationBonus}b)`).join(", ") : "LMT, AMDL, MSTU"}</strong>.
                 </li>
-                <li>✅ <strong>3. Asymetrický pomer ziskov a strát:</strong> Priemerný zisk na víťazný obchod (+${wins.length ? (grossWin / wins.length).toFixed(2) : "0.00"} €) je výrazne vyšší než priemerná strata (-${losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00"} €). Agent naďalej striktne reže straty v zárodku a víťazov drží cez Trailing Stop.</li>
-                <li>✅ <strong>4. Pravidelný ranný report o 09:00:</strong> Každé ráno o 09:00 server automaticky odošle tento súhrn na <strong>mt.banovic@gmail.com</strong>.</li>
+                <li>✅ <strong>3. V5 Hyper-Growth (3-stupňový Trailing Stop & Kellyho škálovanie):</strong> Priemerný zisk na víťazný obchod (+${wins.length ? (grossWin / wins.length).toFixed(2) : "0.00"} €) je výrazne vyšší než priemerná strata (-${losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00"} €). Agent pri +0.45% posúva Stop-Loss na Break-Even a pri A+ signáloch navyšuje pozíciu 1.35x.</li>
+                <li>✅ <strong>4. Pravidelný ranný report o 09:00:</strong> Každé ráno o 09:00 sa odošle kompletný súhrn na <strong>mt.banovic@gmail.com</strong>.</li>
             </ul>
+        </div>
+
+        <div class="weight-item" style="border-left: 4px solid var(--accent-purple);">
+            <div style="font-weight:700; margin-bottom:8px; color:var(--accent-purple);">🕒 Chronologický záznam posledných 15 akcií (Presný čas kedy a čo vykonal):</div>
+            <div style="max-height:240px; overflow-y:auto; font-size:12px;">
+                ${closed.slice(0, 15).map(t => {
+                    const isCloud = (t.exitReason || "").includes("24/7") || (t.lesson || "").includes("Cloud");
+                    const badge = isCloud
+                        ? '<span style="background:rgba(139,92,246,0.25); color:#c4b5fd; padding:1px 6px; border-radius:4px; font-size:10px;">☁️ 24/7 CLOUD</span>'
+                        : '<span style="background:rgba(56,189,248,0.2); color:#7dd3fc; padding:1px 6px; border-radius:4px; font-size:10px;">⚡ LIVE ENGINE</span>';
+                    const pColor = t.pnlEur >= 0 ? "var(--profit-green)" : "var(--loss-red)";
+                    const sign = t.pnlEur >= 0 ? "+" : "";
+                    return `
+                        <div style="padding:5px 0; border-bottom:1px solid rgba(35,48,77,0.5); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <div>
+                                ${badge}
+                                <strong>${t.symbol}</strong>
+                                <span class="text-muted">(${t.openedAt} → ${t.closedAt})</span>
+                            </div>
+                            <div style="color:${pColor}; font-weight:700;">${sign}${t.pnlEur.toFixed(2)} € (${sign}${t.pnlPct.toFixed(2)}%)</div>
+                            <div class="text-muted" style="font-size:11px; width:100%;">${t.exitReason}</div>
+                        </div>
+                    `;
+                }).join("")}
+            </div>
         </div>
     `;
 }
@@ -2050,13 +2102,42 @@ async function sendDailyReportEmailNow() {
         btn.textContent = "⏳ Odosielam na mt.banovic@gmail.com...";
     }
     try {
-        const res = await fetch("/api/send-report-email", { method: "POST" });
+        const closed = state.portfolio.closedTrades || [];
+        const positions = state.portfolio.positions || [];
+        const totalEquity = getTotalPortfolioEquityEur();
+        const netProfit = totalEquity - state.portfolio.initialCapitalEur;
+        const wins = closed.filter(t => t.pnlEur > 0);
+        const losses = closed.filter(t => t.pnlEur <= 0);
+        const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 4);
+        const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
+
+        const emailPayload = {
+            _subject: `📊 Denný AI Burzový Report | Hodnota: ${totalEquity.toFixed(2)} € (${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
+            _template: "table",
+            _captcha: "false",
+            "Dátum a Čas": new Date().toLocaleString("sk-SK"),
+            "Celková Hodnota Portfólia": `${totalEquity.toFixed(2)} € (Štart: 100.00 € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
+            "Hotovosť a Otvorené Pozície": `Hotovosť: ${state.portfolio.cashEur.toFixed(2)} € | Otvorené: ${positions.map(p => `${p.symbol} (${p.leverage || 10}x @ ${p.entryPriceUsd}$)`).join(", ") || "Žiadne"}`,
+            "Bilancia Obchodov": `Spolu: ${closed.length} obchodov | Výhry: ${wins.length} | Straty: ${losses.length} | Generácia AI: #${state.learning.generation}`,
+            "TOP Výherné Obchody": sortedBest.map(t => `${t.symbol}: +${t.pnlEur.toFixed(2)} € (+${t.pnlPct.toFixed(2)}%) [${t.openedAt}->${t.closedAt}]`).join(" | ") || "Žiadne",
+            "Najväčšie Straty": sortedWorst.map(t => `${t.symbol}: ${t.pnlEur.toFixed(2)} € (${t.pnlPct.toFixed(2)}%) [${t.exitReason}]`).join(" | ") || "Žiadne",
+            "Posledných 5 Akcií": closed.slice(0, 5).map(t => `[${t.closedAt}] ${t.symbol}: ${t.pnlEur >= 0 ? "+" : ""}${t.pnlEur.toFixed(2)} € (${t.exitReason})`).join(" || ")
+        };
+
+        const res = await fetch("https://formsubmit.co/ajax/mt.banovic@gmail.com", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(emailPayload)
+        });
         const data = await res.json();
-        if (data && data.ok) {
-            alert("✅ Report bol odoslaný na mt.banovic@gmail.com! (Poznámka: Ak je to úplne prvý e-mail cez FormSubmit, skontrolujte si v Gmaili priečinok Doručené/Spam a kliknite raz na 'Activate Form', aby vám automatické denné e-maily o 9:00 chodili už navždy bez potvrdenia).");
+        if (data && (data.success === "true" || data.success === true)) {
+            alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com!");
             addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
         } else {
-            alert("⚠️ Odpoveď e-mailovej brány: " + (data.message || data.error || "Skontrolujte log"));
+            alert("📬 E-mailová brána odpovedala: " + (data.message || "Odoslané – ak ste ešte nepotvrdili aktiváciu vo svojom Gmaile (od FormSubmit), kliknite v Gmaile na 'Activate Form'."));
         }
     } catch (e) {
         alert("❌ Chyba pri odosielaní e-mailu: " + e.message);
