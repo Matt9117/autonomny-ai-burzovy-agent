@@ -37,7 +37,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const MARKET_PACKS = {
     leveraged: [
-        "SOXL", "TQQQ", "NVDL", "TSLL", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "FNGU"
+        "SOXL", "SOXS", "TQQQ", "SQQQ", "NVDL", "TSLL", "TSLS", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "SPXS", "FNGU"
     ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
@@ -355,6 +355,19 @@ function getServerWatchlist() {
     return Array.from(set);
 }
 
+function isUsRegularSession() {
+    try {
+        const nyStr = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false });
+        const nyDate = new Date(nyStr);
+        const day = nyDate.getDay();
+        if (day === 0 || day === 6) return false;
+        const mins = nyDate.getHours() * 60 + nyDate.getMinutes();
+        return mins >= (9 * 60 + 25) && mins <= (16 * 60); // 09:25 - 16:00 ET (15:25 - 22:00 CET)
+    } catch {
+        return false;
+    }
+}
+
 function scoreServerCandles(mkt) {
     const candles = mkt.candles || [];
     const closes = candles.map(c => c.c);
@@ -363,9 +376,9 @@ function scoreServerCandles(mkt) {
     let rsiScore = 0;
     if (rsi < 30) rsiScore = 80;
     else if (rsi < 38) rsiScore = 50;
-    else if (rsi >= 50 && rsi <= 65) rsiScore = 35;
-    else if (rsi > 76) rsiScore = -75;
-    else if (rsi > 69) rsiScore = -40;
+    else if (rsi >= 48 && rsi <= 64) rsiScore = 42;
+    else if (rsi > 74) rsiScore = -80;
+    else if (rsi > 67) rsiScore = -55;
     else if (rsi < 45) rsiScore = -15;
 
     const ema9Arr = computeEMA(closes, 9);
@@ -373,14 +386,26 @@ function scoreServerCandles(mkt) {
     const ema9 = ema9Arr[ema9Arr.length - 1] || price;
     const ema21 = ema21Arr[ema21Arr.length - 1] || price;
 
-    let trendScore = (price > ema9 && ema9 > ema21) ? 65 : (price > ema21 ? 25 : -45);
+    let trendScore = (price > ema9 && ema9 > ema21) ? 68 : (price > ema21 ? 25 : -45);
     const macdObj = computeMACD(closes);
-    let macdScore = (macdObj.hist > 0 && macdObj.hist > macdObj.prevHist) ? 75 : (macdObj.hist > 0 ? 30 : -40);
+    let macdScore = (macdObj.hist > 0 && macdObj.hist > macdObj.prevHist) ? 78 : (macdObj.hist > 0 ? 30 : -40);
+
+    // Relative Volume Breakout confirmation (RVOL)
+    const vols = candles.map(c => Number(c.v || 0)).filter(v => v > 0);
+    let rvol = 1.0;
+    if (vols.length >= 6) {
+        const recentVol = (vols[vols.length - 1] + vols[vols.length - 2]) / 2;
+        const baseSlice = vols.slice(-12, -2);
+        const avgVol = baseSlice.reduce((a, b) => a + b, 0) / (baseSlice.length || 1);
+        if (avgVol > 0) rvol = recentVol / avgVol;
+    }
     let volumeScore = mkt.changePct > 1.2 ? 35 : (mkt.changePct < -1.2 ? -35 : 10);
+    if (rvol >= 1.35 && price > ema9) volumeScore += 30;
+    else if (rvol < 0.65) volumeScore -= 15;
 
     const atrPct = computeATR(candles, 14);
-    const slPct = Math.round(Math.max(0.8, Math.min(3.5, atrPct * (serverState.learning?.slAtrMultiplier || 2.4))) * 100) / 100;
-    const tpPct = Math.round(Math.max(1.5, Math.min(6.5, atrPct * (serverState.learning?.tpAtrMultiplier || 4.5))) * 100) / 100;
+    const slPct = Math.round(Math.max(0.8, Math.min(3.5, atrPct * (serverState.learning?.slAtrMultiplier || 2.2))) * 100) / 100;
+    const tpPct = Math.round(Math.max(1.8, Math.min(6.8, atrPct * (serverState.learning?.tpAtrMultiplier || 4.8))) * 100) / 100;
 
     const w = Object.assign({ rsi: 22, trend: 26, macd: 20, volume: 14, sentiment: 18 }, serverState.learning?.weights);
     const mem = serverState.learning?.tickerMemory?.[mkt.symbol];
@@ -390,15 +415,33 @@ function scoreServerCandles(mkt) {
         if (mem.bestFactor && w[mem.bestFactor] !== undefined) w[mem.bestFactor] += 10;
     }
 
+    // V5 Hyper-Growth Filters:
+    // 1. Anti-FOMO / Exhaustion Guard: do not buy at the top of an overextended candle (> 2.0x ATR above EMA9 or RSI > 67)
+    const distFromEma9Pct = ema9 > 0 ? ((price - ema9) / ema9) * 100 : 0;
+    let v5Adjustment = 0;
+    if (rsi > 67 || distFromEma9Pct > Math.max(1.1, atrPct * 2.0)) {
+        v5Adjustment -= 35; // Wait for pullback instead of buying the top (prevents AMDL error)
+    }
+    // 2. Minimum Volatility Filter: penalize slow/dead stocks (like LMT) where 5m ATR < 0.25%
+    if (atrPct < 0.25 && !mkt.symbol.endsWith("-USD")) {
+        v5Adjustment -= 28;
+    }
+    // 3. US Regular Session Priority Boost for 3x Leveraged / Inverse ETFs (15:25 - 22:00 CET)
+    if (isUsRegularSession() && MARKET_PACKS.leveraged.includes(mkt.symbol) && price > ema9 && macdObj.hist > 0) {
+        v5Adjustment += 9;
+    }
+
     const totalW = (w.rsi + w.trend + w.macd + w.volume) || 80;
     const rawScore = ((rsiScore * w.rsi) + (trendScore * w.trend) + (macdScore * w.macd) + (volumeScore * w.volume)) / totalW;
-    const aiScore = Math.round(Math.max(-100, Math.min(100, rawScore + repBonus)));
+    const aiScore = Math.round(Math.max(-100, Math.min(100, rawScore + repBonus + v5Adjustment)));
 
     return {
         symbol: mkt.symbol,
         price,
         marketState: mkt.marketState || "REGULAR",
         rsi: Math.round(rsi * 10) / 10,
+        atrPct: Math.round(atrPct * 100) / 100,
+        rvol: Math.round(rvol * 100) / 100,
         slPct,
         tpPct,
         repBonus,
@@ -562,24 +605,38 @@ async function backgroundHeadlessTick() {
             const levPnlPct = (rawPnlPct * lev) - 0.15;
             const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
 
-            if (peakRawPct >= (serverState.learning.trailingTriggerPct || 0.55)) {
-                const newTrail = pos.highPriceUsd * (1 - (serverState.learning.trailingDistancePct || 0.30) / 100);
-                if (newTrail > pos.stopLossUsd) {
-                    pos.stopLossUsd = Number(newTrail.toFixed(4));
-                    pos.trailingActive = true;
-                    changed = true;
-                }
+            // V5 3-Tier Progressive Trailing Stop:
+            // Tier 3 (>= 2.20% raw move = +22% at 10x): Tight laser lock (0.20% from peak)
+            // Tier 2 (>= 1.20% raw move = +12% at 10x): Trend runner lock (0.38% from peak)
+            // Tier 1 (>= 0.45% raw move = +4.5% at 10x): Break-Even shield (+0.10% above entry) so winners can breathe!
+            let targetStop = pos.stopLossUsd;
+            if (peakRawPct >= 2.20) {
+                targetStop = pos.highPriceUsd * (1 - 0.20 / 100);
+            } else if (peakRawPct >= 1.20) {
+                targetStop = pos.highPriceUsd * (1 - 0.38 / 100);
+            } else if (peakRawPct >= 0.45) {
+                const breakEvenStop = pos.entryPriceUsd * (1 + 0.10 / 100);
+                const wideTrailStop = pos.highPriceUsd * (1 - 0.52 / 100);
+                targetStop = Math.max(breakEvenStop, wideTrailStop);
+            }
+            if (targetStop > pos.stopLossUsd) {
+                pos.stopLossUsd = Number(targetStop.toFixed(4));
+                pos.trailingActive = true;
+                changed = true;
             }
 
             let sellReason = null;
             const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
+            const usRegular = isUsRegularSession();
 
             if (pos.currentPriceUsd <= pos.stopLossUsd) {
-                sellReason = pos.trailingActive ? `24/7 Cloud Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
+                sellReason = pos.trailingActive ? `24/7 Cloud V5 Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
             } else if (pos.currentPriceUsd >= pos.takeProfitUsd) {
                 sellReason = `24/7 Cloud TURBO Take-Profit (+${levPnlPct.toFixed(2)}%)!`;
             } else if (canRotatePos && mkt.aiScore <= -22) {
                 sellReason = `24/7 Cloud Obrat AI signálu (${mkt.aiScore})`;
+            } else if (usRegular && isCryptoPos && ageMins >= 12 && Math.abs(rawPnlPct) < 0.35 && topUnheld && !topUnheld.symbol.endsWith("-USD") && topUnheld.aiScore >= 46) {
+                sellReason = `🔔 US Opening Bell Boost: presun z pomalého krypta ${pos.symbol} do US rakety ${topUnheld.symbol}`;
             } else if (canRotatePos && ageMins >= 15 && Math.abs(rawPnlPct) < 0.20 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 18) {
                 sellReason = `⚡ 24/7 Rýchla rotácia: presun zo stagnujúceho ${pos.symbol} do rakety ${topUnheld.symbol}`;
             }
@@ -604,7 +661,7 @@ async function backgroundHeadlessTick() {
                     openedAt: pos.openedAt,
                     closedAt: new Date().toLocaleTimeString("sk-SK"),
                     exitReason: sellReason,
-                    lesson: `Cloud 24/7 TURBO Exekúcia (Gen #${serverState.learning.generation})`
+                    lesson: `Cloud 24/7 V5 Hyper-Growth (Gen #${serverState.learning.generation})`
                 });
                 if (serverState.portfolio.closedTrades.length > 100) serverState.portfolio.closedTrades.pop();
                 syncTickerMemoryFromTrades();
@@ -612,8 +669,8 @@ async function backgroundHeadlessTick() {
             }
         }
 
-        // 2. Evaluate new autonomous entries with Auto-Compounding
-        const maxPositions = Number(serverState.settings?.maxPositions) || 3;
+        // 2. Evaluate new autonomous entries with V5 Conviction Sizing & Auto-Compounding
+        const maxPositions = Number(serverState.settings?.maxPositions) || 4;
         const threshold = serverState.learning?.minScoreThreshold || 26;
 
         let openValEur = 0;
@@ -623,7 +680,7 @@ async function backgroundHeadlessTick() {
             openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - 0.15) / 100)));
         }
         const totalEquityEur = serverState.portfolio.cashEur + openValEur;
-        const compoundedPosEur = Math.max(Number(serverState.settings?.maxPosEur) || 25, Number((totalEquityEur / maxPositions).toFixed(2)));
+        const basePosEur = Math.max(Number(serverState.settings?.maxPosEur) || 25, Number((totalEquityEur / maxPositions).toFixed(2)));
 
         if (positions.length < maxPositions && serverState.portfolio.cashEur >= 5.0) {
             const candidates = Object.values(marketMap)
@@ -632,7 +689,19 @@ async function backgroundHeadlessTick() {
 
             for (const cand of candidates) {
                 if (positions.length >= maxPositions || serverState.portfolio.cashEur < 5.0) break;
-                const amountEur = Math.min(compoundedPosEur, serverState.portfolio.cashEur);
+
+                // V5 Conviction Sizing (Smart Kelly Multiplier):
+                // A+ Rocket (AI >= 55 & proven reputation) gets 1.35x allocation; exploratory signal (< 36) gets 0.80x
+                let convictionMult = 1.0;
+                if (cand.aiScore >= 55 && (cand.repBonus || 0) >= 4) {
+                    convictionMult = 1.35;
+                } else if (cand.aiScore >= 48) {
+                    convictionMult = 1.15;
+                } else if (cand.aiScore < 36) {
+                    convictionMult = 0.80;
+                }
+                const targetEur = Number(Math.min(totalEquityEur * 0.45, basePosEur * convictionMult).toFixed(2));
+                const amountEur = Math.min(targetEur, serverState.portfolio.cashEur);
                 if (amountEur < 5.0) break;
 
                 const netEur = amountEur * (1 - 0.0015);
@@ -655,7 +724,7 @@ async function backgroundHeadlessTick() {
                     trailingActive: false,
                     openedAt: new Date().toLocaleTimeString("sk-SK"),
                     openedTimestamp: Date.now(),
-                    reason: `⚡ ${defaultLev}x Páka | AI +${cand.aiScore} | RSI ${cand.rsi}`,
+                    reason: `🚀 V5 (${convictionMult}x vklad) | ${defaultLev}x Páka | AI +${cand.aiScore} | RVOL ${cand.rvol || 1}x`,
                     entryFactors: cand.factors
                 });
                 serverState.portfolio.cashEur = Number((serverState.portfolio.cashEur - amountEur).toFixed(2));
