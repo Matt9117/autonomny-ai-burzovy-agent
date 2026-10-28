@@ -5,7 +5,7 @@
 
 const MARKET_PACKS = {
     leveraged: [
-        "SOXL", "TQQQ", "NVDL", "TSLL", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "FNGU"
+        "SOXL", "SOXS", "TQQQ", "SQQQ", "NVDL", "TSLL", "TSLS", "MSTU", "CONL", "AMDL", "BITX", "UPRO", "SPXS", "FNGU"
     ],
     tech: [
         "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "TSM",
@@ -461,7 +461,25 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
         (sentScore * w.sentiment)
     ) / totalWeight;
 
-    const finalScore = Math.round(Math.max(-100, Math.min(100, rawComposite + reputationBonus)));
+    // V5 Hyper-Growth Filters:
+    // 1. Anti-FOMO / Exhaustion Guard (do not buy at the top of an overextended candle)
+    const curPrice = closes[closes.length - 1] || 0;
+    const distFromEma9Pct = ema9 > 0 ? ((curPrice - ema9) / ema9) * 100 : 0;
+    let v5Adjustment = 0;
+    if (rsi > 67 || distFromEma9Pct > Math.max(1.1, atrObj.atrPct * 2.0)) {
+        v5Adjustment -= 35;
+    }
+    // 2. Minimum Volatility Filter (avoid slow/dead stocks like LMT with 5m ATR < 0.25%)
+    if (atrObj.atrPct < 0.25 && !symbol.endsWith("-USD")) {
+        v5Adjustment -= 28;
+    }
+    // 3. US Regular Session Priority Boost for 3x Leveraged / Inverse ETFs
+    const sessionInfo = getMarketSessionInfo();
+    if (sessionInfo.session === "REGULAR" && MARKET_PACKS.leveraged.includes(symbol) && curPrice > ema9 && macdObj.hist > 0) {
+        v5Adjustment += 9;
+    }
+
+    const finalScore = Math.round(Math.max(-100, Math.min(100, rawComposite + reputationBonus + v5Adjustment)));
 
     return {
         rsi: Math.round(rsi * 10) / 10,
@@ -838,26 +856,31 @@ function evaluateOpenPositions() {
         const rawPnlPct = valObj.rawPct;
         const levPnlPct = valObj.leveragedPct;
 
-        // 1. Check Fast Trailing Stop activation & update
-        const triggerPct = state.learning.trailingTriggerPct || 0.55;
-        const distPct = state.learning.trailingDistancePct || 0.30;
+        // 1. V5 3-Tier Progressive Trailing Stop activation & update
         const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+        let targetStop = pos.stopLossUsd;
+        if (peakRawPct >= 2.20) {
+            targetStop = pos.highPriceUsd * (1 - 0.20 / 100);
+        } else if (peakRawPct >= 1.20) {
+            targetStop = pos.highPriceUsd * (1 - 0.38 / 100);
+        } else if (peakRawPct >= 0.45) {
+            const breakEvenStop = pos.entryPriceUsd * (1 + 0.10 / 100);
+            const wideTrailStop = pos.highPriceUsd * (1 - 0.52 / 100);
+            targetStop = Math.max(breakEvenStop, wideTrailStop);
+        }
 
-        if (peakRawPct >= triggerPct) {
-            const newTrailStop = pos.highPriceUsd * (1 - distPct / 100);
-            if (newTrailStop > pos.stopLossUsd) {
-                pos.stopLossUsd = Math.round(newTrailStop * 10000) / 10000;
-                if (!pos.trailingActive) {
-                    pos.trailingActive = true;
-                    addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný Rýchly Trailing Stop pri zisku +${levPnlPct.toFixed(2)}% (${pos.stopLossUsd.toFixed(2)} $).`, "info");
-                }
+        if (targetStop > pos.stopLossUsd) {
+            pos.stopLossUsd = Math.round(targetStop * 10000) / 10000;
+            if (!pos.trailingActive) {
+                pos.trailingActive = true;
+                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V5 3-stupňový Trailing Stop / Break-Even pri zisku +${levPnlPct.toFixed(2)}% (${pos.stopLossUsd.toFixed(2)} $).`, "info");
             }
         }
 
         // 2. Check Stop-Loss / Trailing Stop hit
         if (pos.currentPriceUsd <= pos.stopLossUsd) {
             const reason = pos.trailingActive
-                ? `Trailing Stop zasiahnutý (${valObj.leverage}x zisk uzamknutý)`
+                ? `V5 Trailing Stop zasiahnutý (${valObj.leverage}x zisk uzamknutý)`
                 : `Ochranný ATR Stop-Loss zasiahnutý (${valObj.leverage}x)`;
             executeSellPosition(pos.id, reason);
             continue;
@@ -875,10 +898,14 @@ function evaluateOpenPositions() {
             continue;
         }
 
-        // 5. Fast Capital Rotation (Opportunity Swap if stagnant > 15 mins and much stronger rocket exists)
-        // Only rotate stocks if the US stock market is currently open/active (prevent overnight churn on closed US stocks!)
+        // 5. Fast Capital Rotation & US Opening Bell Priority Boost
         const isPosCrypto = pos.symbol.endsWith("-USD");
         const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
+        if (sessionInfo.session === "REGULAR" && isPosCrypto && ageMins >= 12 && Math.abs(rawPnlPct) < 0.35 &&
+            topUnheldCandidate && !topUnheldCandidate.symbol.endsWith("-USD") && topUnheldCandidate.aiScore >= 46) {
+            executeSellPosition(pos.id, `🔔 US Opening Bell Boost: uvoľňujem pomalé krypto ${pos.symbol} pre americkú raketu ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
+            continue;
+        }
         if ((isPosCrypto || sessionInfo.session === "REGULAR" || sessionInfo.session === "PREMARKET") &&
             ageMins >= 18 && Math.abs(rawPnlPct) < 0.20 &&
             topUnheldCandidate && topUnheldCandidate.aiScore >= mkt.aiScore + 18 &&
@@ -891,7 +918,7 @@ function evaluateOpenPositions() {
 
 function evaluateNewEntries() {
     const sessionInfo = getMarketSessionInfo();
-    const maxPositions = Number(state.settings.maxPositions) || 3;
+    const maxPositions = Number(state.settings.maxPositions) || 4;
     if (state.portfolio.positions.length >= maxPositions) return;
     if (state.portfolio.cashEur < 5.0) return;
 
@@ -904,15 +931,25 @@ function evaluateNewEntries() {
         })
         .sort((a, b) => b.aiScore - a.aiScore);
 
-    // Auto-Compounding: dynamically scale position size as total account equity grows toward 500 €!
+    // V5 Auto-Compounding + Conviction Position Sizing (Smart Kelly Multiplier)
     const totalEquity = getTotalPortfolioEquityEur();
-    const compoundedPosSize = Math.max(Number(state.settings.maxPosEur) || 25, Math.round((totalEquity / maxPositions) * 100) / 100);
+    const basePosSize = Math.max(Number(state.settings.maxPosEur) || 25, Math.round((totalEquity / maxPositions) * 100) / 100);
 
     for (const cand of candidates) {
         if (state.portfolio.positions.length >= maxPositions) break;
         if (state.portfolio.cashEur < 5.0) break;
 
-        const desiredEur = Math.min(compoundedPosSize, state.portfolio.cashEur);
+        let convictionMult = 1.0;
+        if (cand.aiScore >= 55 && (cand.reputationBonus || 0) >= 4) {
+            convictionMult = 1.35;
+        } else if (cand.aiScore >= 48) {
+            convictionMult = 1.15;
+        } else if (cand.aiScore < 36) {
+            convictionMult = 0.80;
+        }
+
+        const targetSize = Math.min(totalEquity * 0.45, Math.round(basePosSize * convictionMult * 100) / 100);
+        const desiredEur = Math.min(targetSize, state.portfolio.cashEur);
         if (desiredEur < 5.0) break;
 
         executeBuyPosition(cand, desiredEur);
