@@ -250,11 +250,15 @@ async function loadStateFromServer() {
             if (state.learning.minScoreThreshold > 42 || state.learning.minScoreThreshold < 34) {
                 state.learning.minScoreThreshold = 38;
             }
-            state.version = 12;
-            state.stateResetId = "v12_no_auto_reset";
+            state.version = 14;
+            state.stateResetId = "v14_hybrid_mlp_llm";
+            ensureNeuralNet();
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 V12 Profitable Engine (1 000 € | Zákaz auto-resetu pri F5 | Early Break-Even +1.3%): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 Hybrid V14 Engine (Vrstva 1: 10→8→1 MLP Sieť + Vrstva 2: Gemini 3 Flash LLM): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            if (state.settings?.llmApiKey) {
+                setTimeout(() => testLlmBrainLive(true), 1500);
+            }
         } else {
             await saveStateToServer();
         }
@@ -1401,10 +1405,54 @@ async function saveLlmApiKey() {
     updateLlmStatusUi();
     await saveStateToServer();
     if (key) {
-        const provider = key.startsWith("gsk_") ? "Groq Llama-3.3-70B" : "Google Gemini 2.5 Flash";
-        addLog(`🧠 Kognitívny AI Mozog Vrstvy 2 (${provider}) bol úspešne aktivovaný! Pred každým obchodom posúdi kontext grafu, správ a minulých chýb.`, "success");
+        await testLlmBrainLive(true);
     } else {
         addLog("ℹ️ Kognitívny LLM kľúč bol odstránený – agent beží na Vrstve 1 (10→8→1 MLP Neurónová Sieť).", "info");
+    }
+}
+
+async function testLlmBrainLive(isSilent = false) {
+    const inp = document.getElementById("llmApiKeyInput");
+    const key = ((inp && inp.value.trim()) || state.settings?.llmApiKey || "").trim();
+    if (!key) {
+        if (!isSilent) alert("Vložte prosím najprv váš Gemini (AIza...) alebo Groq (gsk_...) API kľúč do políčka.");
+        return;
+    }
+    state.settings.llmApiKey = key;
+    const lbl = document.getElementById("llmBrainStatusLabel");
+    if (lbl) {
+        lbl.textContent = "⏳ Overujem spojenie s LLM mozgom...";
+        lbl.className = "badge badge-warn";
+    }
+    const sampleSym = state.selectedSymbol || "NVDA";
+    const sampleMkt = marketCache[sampleSym] || {
+        symbol: sampleSym,
+        price: 140,
+        changePct: 1.2,
+        rsi: 56.5,
+        trendLabel: "Silný rast (EMA9>21)",
+        macdLabel: "Býčí impulz ↗",
+        atrPct: 0.65,
+        winProbPct: 68.5,
+        aiScore: 46,
+        latestHeadline: "Tech stocks rally as AI chip demand remains strong",
+        sentimentScore: 25
+    };
+    const res = await consultCognitiveLlmBrain(sampleMkt, true);
+    if (res.online) {
+        if (lbl) {
+            lbl.textContent = `🟢 Vrstva 1 (MLP Sieť) + Vrstva 2 (${res.modelName} ONLINE – Otestované!)`;
+            lbl.className = "badge badge-profit";
+        }
+        const msg = `🧠 TEST LLM MOZGU ÚSPEŠNÝ (${res.modelName}): Verdikt pre ${sampleSym} -> ${res.approved ? "SCHVÁLENÉ" : "ZAMIETNUTÉ"} (Istota ${res.confidence}%): "${res.reasonSk}"`;
+        addLog(msg, "success");
+        if (!isSilent) alert(`✅ LLM Mozog (${res.modelName}) je 100% AKTÍVNY a odpovedá!\n\nUkážka živej odpovede pre ${sampleSym}:\n"${res.reasonSk}" (Istota: ${res.confidence}%)`);
+    } else {
+        if (lbl) {
+            lbl.textContent = `⚠️ Chyba LLM kľúča – skontrolujte kľúč`;
+            lbl.className = "badge badge-loss";
+        }
+        if (!isSilent) alert("❌ Nepodarilo sa spojiť s LLM API. Skontrolujte platnosť API kľúča.");
     }
 }
 
@@ -1414,9 +1462,9 @@ function updateLlmStatusUi() {
     const nnBadge = document.getElementById("nnStatusBadge");
     const key = (state.settings?.llmApiKey || "").trim();
     if (inp && key && !inp.value) inp.value = key;
-    if (lbl) {
+    if (lbl && !lbl.textContent.includes("Otestované")) {
         if (key) {
-            const provider = key.startsWith("gsk_") ? "Groq Llama-3.3-70B AKTÍVNY" : "Gemini 2.5 Flash AKTÍVNY";
+            const provider = key.startsWith("gsk_") ? "Groq Llama-3.3-70B AKTÍVNY" : "Gemini 3 Flash AKTÍVNY";
             lbl.textContent = `✅ Vrstva 1 (MLP Sieť) + Vrstva 2 (${provider})`;
             lbl.className = "badge badge-profit";
         } else {
@@ -1430,9 +1478,9 @@ function updateLlmStatusUi() {
     }
 }
 
-async function consultCognitiveLlmBrain(mkt) {
+async function consultCognitiveLlmBrain(mkt, isTestCall = false) {
     const apiKey = (state.settings?.llmApiKey || "").trim();
-    if (!apiKey) return { approved: true, reasonSk: "" };
+    if (!apiKey) return { approved: true, online: false, reasonSk: "" };
 
     const recentMistakes = (state.portfolio.closedTrades || [])
         .filter(t => t.pnlEur < 0)
@@ -1449,7 +1497,9 @@ Vráť VÝHRADNE čisté JSON v tvare: {"approved": true alebo false, "confidenc
 
     try {
         let rawJsonText = "";
+        let usedModel = "Gemini 3 Flash";
         if (apiKey.startsWith("gsk_")) {
+            usedModel = "Groq Llama-3.3-70B";
             // Groq Llama-3.3-70B API
             const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
                 method: "POST",
@@ -1467,24 +1517,36 @@ Vráť VÝHRADNE čisté JSON v tvare: {"approved": true alebo false, "confidenc
             const data = await res.json();
             rawJsonText = data?.choices?.[0]?.message?.content || "";
         } else {
-            // Google Gemini 2.5 Flash API
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
-            const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
-                })
-            });
-            const data = await res.json();
-            rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            // Google Gemini 3 Flash API (with automatic fallback to gemini-3.1-flash-lite)
+            const geminiModels = ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it"];
+            for (const gm of geminiModels) {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${gm}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { temperature: 0.2 }
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                    if (rawJsonText) {
+                        usedModel = gm;
+                        break;
+                    }
+                }
+            }
         }
 
         if (rawJsonText) {
-            const cleaned = rawJsonText.replace(/```json|```/g, "").trim();
+            const matchJson = rawJsonText.match(/\{[\s\S]*\}/);
+            const cleaned = matchJson ? matchJson[0] : rawJsonText.replace(/```json|```/g, "").trim();
             const parsed = JSON.parse(cleaned);
             return {
+                online: true,
+                modelName: usedModel,
                 approved: parsed.approved !== false && Number(parsed.confidence || 70) >= 60,
                 confidence: Number(parsed.confidence || 70),
                 reasonSk: String(parsed.reasonSk || "")
@@ -1493,7 +1555,7 @@ Vráť VÝHRADNE čisté JSON v tvare: {"approved": true alebo false, "confidenc
     } catch (e) {
         console.warn("LLM Brain consultation fallback to MLP Layer 1:", e);
     }
-    return { approved: true, reasonSk: "" };
+    return { approved: true, online: false, modelName: "", reasonSk: "" };
 }
 
 async function executeBuyPosition(mkt, amountEur) {
