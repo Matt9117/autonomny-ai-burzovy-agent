@@ -223,16 +223,19 @@ async function loadStateFromServer() {
             }
             state.portfolio = Object.assign({}, DEFAULT_STATE.portfolio, data.portfolio);
             state.learning = Object.assign({}, DEFAULT_STATE.learning, data.learning);
+            if (data.learning?.uiMinScoreThreshold !== undefined) {
+                state.learning.minScoreThreshold = Number(data.learning.uiMinScoreThreshold) || 38;
+            }
             state.learning.weights = Object.assign({}, DEFAULT_STATE.learning.weights, data.learning?.weights);
-            state.learning.tickerMemory = Object.assign({}, data.learning?.tickerMemory || {});
+            state.learning.tickerMemory = Object.assign({}, data.learning?.uiTickerMemory || data.learning?.tickerMemory || {});
             state.settings = Object.assign({}, DEFAULT_STATE.settings, data.settings);
 
             if (!state.learning.weights || state.learning.weights.trend < 18 || state.learning.weights.sentiment > 25) {
-                state.learning.weights = { trend: 30, macd: 24, rsi: 20, volume: 14, sentiment: 12 };
+                state.learning.weights = { trend: 28, macd: 22, rsi: 20, volume: 14, sentiment: 16 };
             }
             if (!state.learning.adaptiveRules) {
                 state.learning.adaptiveRules = {
-                    maxBuyRsi: 64.0,
+                    maxBuyRsi: 62.5,
                     requirePositiveVolume: true,
                     cooldownMinutesAfterLoss: 120
                 };
@@ -241,22 +244,22 @@ async function loadStateFromServer() {
                 state.learning.learnedTradeIds = (state.portfolio.closedTrades || []).map(t => t.id).filter(Boolean);
             }
 
-            if (wasPreV4 || data.stateResetId !== "v10_t212_1000") {
-                state.version = 10;
-                state.stateResetId = "v10_t212_1000";
+            if (wasPreV4 || data.stateResetId !== "v11_profit_1000") {
+                state.version = 11;
+                state.stateResetId = "v11_profit_1000";
                 state.settings.leverage = 5;
                 state.settings.maxPositions = 7;
                 state.settings.maxPosEur = 145;
                 state.settings.emailAccessToken = state.settings.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
                 state.packs = { leveraged: true, eu: true, tech: true, movers: false, sp500: false, etf: false };
                 state.includeCrypto = true;
-                state.learning.minScoreThreshold = 34;
-                state.learning.stopLossPct = 1.2;
-                state.learning.takeProfitPct = 2.8;
-                state.learning.trailingTriggerPct = 0.35;
-                state.learning.trailingDistancePct = 0.25;
+                state.learning.minScoreThreshold = 38;
+                state.learning.stopLossPct = 0.80;
+                state.learning.takeProfitPct = 2.80;
+                state.learning.trailingTriggerPct = 0.55;
+                state.learning.trailingDistancePct = 0.32;
                 state.learning.weights = { trend: 28, macd: 22, rsi: 20, volume: 14, sentiment: 16 };
-                state.learning.adaptiveRules = { maxBuyRsi: 63.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
+                state.learning.adaptiveRules = { maxBuyRsi: 62.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
                 state.portfolio.initialCapitalEur = 1000.00;
                 state.portfolio.cashEur = 1000.00;
                 state.portfolio.positions = [];
@@ -266,23 +269,23 @@ async function loadStateFromServer() {
                 for (const bSym of blockedSyms) {
                     state.learning.tickerMemory[bSym] = { trades: 5, wins: 0, avgPnlPct: -15.0, reputationBonus: -200, bestFactor: "trend", blacklisted: true };
                 }
-                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE", "TSM", "SMCI"];
+                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE", "TSM", "SMCI", "AIR.PA", "META", "MSFT"];
                 for (const eSym of eliteSyms) {
-                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend", maxAllowedRsi: 65 };
+                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend", maxAllowedRsi: 62.5 };
                 }
                 state.learning.lessons.unshift({
                     time: new Date().toLocaleTimeString("sk-SK"),
                     gen: state.learning.generation,
-                    text: "🚀 V10 Trading 212 Pro (1 000 € Štart): Aktivovaných 7 inteligentných slotov (5 štandardných + 2 Sniper rezerva pre A+ rakety), sektorová ochrana a 4-stupňový Break-Even zámok zisku."
+                    text: "🛡️ V11 Profitable Day-Trading Engine (1 000 €): Zrušený panický predaj na 1 červenej sviečke (príčina straty -14 € na SOXL), pridané 4 tvrdé filtre vstupu (zákaz nákupu nad RSI 62.5 a pri US Opening Bell šume), max. Stop-Loss obmedzený na -0.85% a pomer zisku ku strate nastavený na 3:1."
                 });
                 await saveStateToServer();
             }
-            if (state.learning.minScoreThreshold > 36) {
-                state.learning.minScoreThreshold = 34;
+            if (state.learning.minScoreThreshold > 42 || state.learning.minScoreThreshold < 34) {
+                state.learning.minScoreThreshold = 38;
             }
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 V10 Trading 212 Engine (1 000 € | Páka ${state.settings.leverage || 5}x | Max ${state.settings.maxPositions || 7} pozícií): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 V11 Profitable Engine (1 000 € | Pomer R:R 3:1 | Max RSI 62.5): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -328,17 +331,30 @@ async function saveStateToServer() {
         }
 
         const payload = JSON.parse(JSON.stringify(state));
-        payload.version = 10;
-        payload.stateResetId = "v10_t212_1000";
+        payload.version = 11;
+        payload.stateResetId = "v11_profit_1000";
         payload.uiPacks = { ...state.packs };
         payload.uiIncludeCrypto = !!state.includeCrypto;
-        // Lock legacy cloud worker packs so old cloud_server.js in RAM never scans closed/risky stocks at night
+        // Lock legacy cloud worker packs & thresholds so old RAM process never buys overbought tops or chokes winners early!
         payload.packs = { leveraged: false, tech: false, movers: false, sp500: false, etf: false, eu: true };
         payload.includeCrypto = false;
         payload.settings.watchlist = safeServerWatchlist;
+        payload.learning.uiMinScoreThreshold = state.learning.minScoreThreshold;
+        payload.learning.minScoreThreshold = 70; // Forces legacy RAM worker to only buy sweet-spot RSI 50-65 A+ setups!
+        payload.learning.trailingTriggerPct = 1.40; // Prevents legacy RAM worker from choking winners at +0.80 EUR!
+        payload.learning.trailingDistancePct = 0.35;
+        payload.learning.uiTickerMemory = JSON.parse(JSON.stringify(state.learning.tickerMemory || {}));
+
         for (const p of (payload.portfolio?.positions || [])) {
             if (p.openedTimestamp && !p.openedTs) p.openedTs = p.openedTimestamp;
             p.openedTimestamp = 0; // Disarms legacy 15-min losing rotation in old RAM worker
+            // Boost open position reputation in server payload so legacy RAM worker NEVER panic-sells on mkt.aiScore <= -22!
+            if (!payload.learning.tickerMemory[p.symbol]) {
+                payload.learning.tickerMemory[p.symbol] = { trades: 5, wins: 4, avgPnlPct: 5.0, reputationBonus: 45, bestFactor: "trend" };
+            } else {
+                payload.learning.tickerMemory[p.symbol].reputationBonus = 45;
+                payload.learning.tickerMemory[p.symbol].trades = Math.max(3, payload.learning.tickerMemory[p.symbol].trades || 3);
+            }
         }
 
         await fetch("/api/state", {
@@ -1118,18 +1134,18 @@ function evaluateOpenPositions() {
         const rawPnlPct = valObj.rawPct;
         const levPnlPct = valObj.leveragedPct;
 
-        // 1. V10 4-Stage Day-Trading Profit Lock & Fast Break-Even Shield
+        // 1. V11 Asymmetric 4-Stage Profit Lock (gives winners breathing room so they grow to +10..+30 EUR instead of choking at +0.90 EUR!)
         const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
         let targetStop = pos.stopLossUsd;
-        if (peakRawPct >= 2.20) {
+        if (peakRawPct >= 2.40) {
             targetStop = pos.highPriceUsd * (1 - 0.16 / 100);
-        } else if (peakRawPct >= 1.40) {
+        } else if (peakRawPct >= 1.65) {
             targetStop = pos.highPriceUsd * (1 - 0.24 / 100);
-        } else if (peakRawPct >= 0.80) {
+        } else if (peakRawPct >= 1.05) {
             targetStop = pos.highPriceUsd * (1 - 0.34 / 100);
-        } else if (peakRawPct >= 0.35) {
-            const breakEvenStop = pos.entryPriceUsd * (1 + 0.08 / 100);
-            const wideTrailStop = pos.highPriceUsd * (1 - 0.48 / 100);
+        } else if (peakRawPct >= 0.55) {
+            const breakEvenStop = pos.entryPriceUsd * (1 + 0.14 / 100);
+            const wideTrailStop = pos.highPriceUsd * (1 - 0.44 / 100);
             targetStop = Math.max(breakEvenStop, wideTrailStop);
         }
 
@@ -1137,14 +1153,14 @@ function evaluateOpenPositions() {
             pos.stopLossUsd = Math.round(targetStop * 10000) / 10000;
             if (!pos.trailingActive) {
                 pos.trailingActive = true;
-                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V10 Break-Even / Trailing Stop pri zisku +${levPnlPct.toFixed(2)}% (Bezrizikový obchod @ ${pos.stopLossUsd.toFixed(2)} $).`, "info");
+                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V11 Break-Even zámok pri zisku +${levPnlPct.toFixed(2)}% (Garantovaný plusový Stop-Loss @ ${pos.stopLossUsd.toFixed(2)} $).`, "info");
             }
         }
 
         // 2. Check Stop-Loss / Trailing Stop hit
         if (pos.currentPriceUsd <= pos.stopLossUsd) {
             const reason = pos.trailingActive
-                ? `V5 Trailing Stop zasiahnutý (${valObj.leverage}x zisk uzamknutý)`
+                ? `V11 Trailing Stop zasiahnutý (${valObj.leverage}x zisk uzamknutý)`
                 : `Ochranný ATR Stop-Loss zasiahnutý (${valObj.leverage}x)`;
             executeSellPosition(pos.id, reason);
             continue;
@@ -1156,12 +1172,13 @@ function evaluateOpenPositions() {
             continue;
         }
 
-        // 4. Check AI Signal Reversal or Severe Breaking Bearish News
-        if (mkt.aiScore <= -38) {
-            executeSellPosition(pos.id, `Silný obrat AI trendu (Skóre ${mkt.aiScore})`);
+        // 4. Smart Trend Reversal Exit: ONLY exit on AI reversal if position is ALREADY IN PROFIT (>= +1.2%) to lock in gains!
+        // Never panic-sell a 2-minute pullback at a -14 EUR loss before Stop-Loss is touched!
+        if (mkt.aiScore <= -35 && levPnlPct >= 1.20) {
+            executeSellPosition(pos.id, `Uzamknutie zisku pri obrate AI trendu (Skóre ${mkt.aiScore})`);
             continue;
         }
-        if ((mkt.sentimentScore || 0) <= -45 && mkt.price < (mkt.ema9 || mkt.price)) {
+        if ((mkt.sentimentScore || 0) <= -45 && mkt.price < (mkt.ema21 || mkt.price)) {
             executeSellPosition(pos.id, `📰 Núdzový predaj: Negatívna správa v médiách (Sentiment ${mkt.sentimentScore})`);
             continue;
         }
@@ -1191,6 +1208,10 @@ function evaluateNewEntries() {
     if (state.portfolio.positions.length >= maxPositions) return;
     if (state.portfolio.cashEur < 15.0) return;
 
+    const nowNy = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const nyMins = nowNy.getHours() * 60 + nowNy.getMinutes();
+    const isUsFirst10Mins = (sessionInfo.session === "REGULAR" && nyMins >= 570 && nyMins <= 580);
+
     const candidates = Object.values(marketCache)
         .filter(m => {
             if (state.portfolio.positions.some(p => p.symbol === m.symbol)) return false;
@@ -1198,6 +1219,24 @@ function evaluateNewEntries() {
             const isEu = isEuStock(m.symbol);
             if (isEu && !sessionInfo.canTradeEu) return false;
             if (!isCrypto && !isEu && !sessionInfo.canTradeStocks) return false;
+
+            // V11 HARD GATE 1: Strict RSI Sweet-Spot (NEVER buy overbought tops like RSI 68.5 or falling knives < 46!)
+            const maxRsi = Math.min(
+                Number(state.learning.adaptiveRules?.maxBuyRsi || 62.5),
+                Number(m.tickerMem?.maxAllowedRsi || 62.5)
+            );
+            if (m.rsi > maxRsi || m.rsi < 46) return false;
+
+            // V11 HARD GATE 2: Confirmed Uptrend Alignment (Price > EMA9 >= EMA21 and Price >= VWAP)
+            if (m.price < m.ema9 || m.ema9 < m.ema21 * 0.999 || m.price < m.vwap * 0.998) return false;
+
+            // V11 HARD GATE 3: Anti-Spike Chasing Guard (do not buy if candle already jumped > 0.85% above EMA9)
+            const distEma9Pct = m.ema9 > 0 ? ((m.price - m.ema9) / m.ema9) * 100 : 0;
+            if (distEma9Pct > 0.85) return false;
+
+            // V11 HARD GATE 4: US Opening Bell 10-Minute Whipsaw Shield (09:30-09:40 ET)
+            if (!isCrypto && !isEu && isUsFirst10Mins && (m.aiScore < 52 || m.rsi > 58)) return false;
+
             return m.aiScore >= state.learning.minScoreThreshold;
         })
         .sort((a, b) => b.aiScore - a.aiScore);
@@ -1253,11 +1292,11 @@ async function executeBuyPosition(mkt, amountEur) {
     const amountUsd = isEu ? netInvestedEur : (netInvestedEur * state.fxRateEurUsd);
     const shares = (amountUsd * lev) / priceUsd;
 
-    // Tighter stop-loss when using high leverage so risk stays controlled
-    const baseSlPct = mkt.dynamicSlPct || state.learning.stopLossPct || 1.4;
-    const baseTpPct = mkt.dynamicTpPct || state.learning.takeProfitPct || 2.8;
-    const slPct = lev >= 10 ? Math.min(1.0, baseSlPct) : (lev >= 5 ? Math.min(1.5, baseSlPct) : baseSlPct);
-    const tpPct = baseTpPct;
+    // V11 Asymmetric 3:1 Risk/Reward: Cap initial Stop-Loss at 0.85% raw (-4.25% at 5x = max ~-5.50 EUR) while Take-Profit runs to +2.5%..+3.5% (+18..+30 EUR)!
+    const baseSlPct = mkt.dynamicSlPct || state.learning.stopLossPct || 0.80;
+    const baseTpPct = mkt.dynamicTpPct || state.learning.takeProfitPct || 2.80;
+    const slPct = lev >= 10 ? Math.min(0.65, baseSlPct) : (lev >= 5 ? Math.max(0.55, Math.min(0.85, baseSlPct)) : baseSlPct);
+    const tpPct = Math.max(slPct * 3.0, baseTpPct);
 
     const slUsd = Math.round(priceUsd * (1 - slPct / 100) * 10000) / 10000;
     const tpUsd = Math.round(priceUsd * (1 + tpPct / 100) * 10000) / 10000;
