@@ -154,8 +154,10 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     newsTimer = setInterval(() => {
         fetchAllNews();
-    }, 90000);
+        checkAutoDailyEmail0900();
+    }, 60000);
 
+    setTimeout(() => checkAutoDailyEmail0900(), 8000);
     window.addEventListener("resize", () => renderSelectedChart());
 });
 
@@ -166,7 +168,10 @@ async function loadStateFromServer() {
         if (data && data.version) {
             const wasPreV4 = (data.version < 4);
             state = Object.assign({}, DEFAULT_STATE, data);
-            state.packs = Object.assign({}, DEFAULT_STATE.packs, data.packs);
+            state.packs = Object.assign({}, DEFAULT_STATE.packs, data.uiPacks || data.packs);
+            if (data.uiIncludeCrypto !== undefined) {
+                state.includeCrypto = !!data.uiIncludeCrypto;
+            }
             state.portfolio = Object.assign({}, DEFAULT_STATE.portfolio, data.portfolio);
             state.learning = Object.assign({}, DEFAULT_STATE.learning, data.learning);
             state.learning.weights = Object.assign({}, DEFAULT_STATE.learning.weights, data.learning?.weights);
@@ -181,15 +186,13 @@ async function loadStateFromServer() {
                 state.includeCrypto = true;
                 state.learning.trailingTriggerPct = 0.55;
                 state.learning.trailingDistancePct = 0.30;
-                // Upgrade existing open positions to 5x Turbo leverage
                 for (const p of state.portfolio.positions) {
                     if (!p.leverage) p.leverage = 5;
-                    if (!p.openedTimestamp) p.openedTimestamp = Date.now();
                 }
                 await saveStateToServer();
             }
             replayHistoricalLogsFromState();
-            addLog(`🚀 V5 Hyper-Growth Aktívny (Páka ${state.settings.leverage || 10}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 V6 Shield & Hyper-Growth Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -219,17 +222,37 @@ function replayHistoricalLogsFromState() {
     for (const p of (state.portfolio.positions || [])) {
         const div = document.createElement("div");
         div.className = "log-entry";
-        div.innerHTML = `<span class="log-time">[${p.openedAt || "--:--"}]</span> <span style="color:#38bdf8">🟢 OTVORENÁ POZÍCIA <strong>${p.symbol} (${p.leverage || 10}x)</strong>: Vklad ${p.investedEur.toFixed(2)} € @ ${p.entryPriceUsd.toFixed(2)} $ | Stop-Loss: ${p.stopLossUsd.toFixed(2)} $ | ${p.reason || ""}</span>`;
+        div.innerHTML = `<span class="log-time">[${p.openedAt || "--:--"}]</span> <span style="color:#38bdf8">🟢 OTVORENÁ POZÍCIA <strong>${p.symbol} (${p.leverage || 5}x)</strong>: Vklad ${p.investedEur.toFixed(2)} € @ ${p.entryPriceUsd.toFixed(2)} $ | Stop-Loss: ${p.stopLossUsd.toFixed(2)} $ | ${p.reason || ""}</span>`;
         box.prepend(div);
     }
 }
 
 async function saveStateToServer() {
     try {
+        const sessionInfo = getMarketSessionInfo();
+        let safeServerWatchlist = "BTC-USD,ETH-USD,SOL-USD";
+        if (sessionInfo.session === "REGULAR") {
+            safeServerWatchlist = "SOXL,NVDL,TQQQ,NVDA,TSLA,AAPL,MSFT,AVGO";
+        } else if (sessionInfo.canTradeEu) {
+            safeServerWatchlist = "ENR.DE,RHM.DE,IFX.DE,ASML.AS,SAP.DE,SIE.DE,DBK.DE";
+        }
+
+        const payload = JSON.parse(JSON.stringify(state));
+        payload.uiPacks = { ...state.packs };
+        payload.uiIncludeCrypto = !!state.includeCrypto;
+        // Lock legacy cloud worker packs so old cloud_server.js in RAM never scans closed/risky stocks at night
+        payload.packs = { leveraged: false, tech: false, movers: false, sp500: false, etf: false, eu: true };
+        payload.includeCrypto = false;
+        payload.settings.watchlist = safeServerWatchlist;
+        for (const p of (payload.portfolio?.positions || [])) {
+            if (p.openedTimestamp && !p.openedTs) p.openedTs = p.openedTimestamp;
+            p.openedTimestamp = 0; // Disarms legacy 15-min losing rotation in old RAM worker
+        }
+
         await fetch("/api/state", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(state)
+            body: JSON.stringify(payload)
         });
     } catch (e) {
         console.warn("Uloženie stavu zlyhalo:", e);
@@ -950,7 +973,8 @@ function evaluateOpenPositions() {
 
         // 5. Profitable Capital Rotation & US Opening Bell Priority Boost (NEVER rotate at a loss! Must be >= +0.05% net profit)
         const isPosCrypto = pos.symbol.endsWith("-USD");
-        const ageMins = pos.openedTimestamp ? (Date.now() - pos.openedTimestamp) / 60000 : 0;
+        const ts = pos.openedTs || pos.openedTimestamp;
+        const ageMins = ts ? (Date.now() - ts) / 60000 : 0;
         if (levPnlPct >= 0.05 && sessionInfo.session === "REGULAR" && isPosCrypto && ageMins >= 20 && levPnlPct < 2.0 &&
             topUnheldCandidate && !topUnheldCandidate.symbol.endsWith("-USD") && topUnheldCandidate.aiScore >= 52) {
             executeSellPosition(pos.id, `🔔 US Opening Bell Boost (v pluse): presun z krypta ${pos.symbol} do US rakety ${topUnheldCandidate.symbol} (AI +${topUnheldCandidate.aiScore})`);
@@ -1049,7 +1073,8 @@ async function executeBuyPosition(mkt, amountEur) {
         dynamicTpPct: tpPct,
         trailingActive: false,
         openedAt: new Date().toLocaleTimeString("sk-SK"),
-        openedTimestamp: Date.now(),
+        openedTimestamp: 0, // Disarms legacy RAM worker 15m rotation
+        openedTs: Date.now(),
         reason: reasonParts.join(" | "),
         entryFactors: { ...mkt.factors }
     };
@@ -2001,10 +2026,46 @@ async function forwardOrderToBroker(symbol, side, notionalUsd) {
 function openDailyReportModal() {
     const modal = document.getElementById("dailyReportModal");
     const box = document.getElementById("dailyReportContent");
+    const tokInput = document.getElementById("emailAccessTokenInput");
+    if (tokInput) {
+        tokInput.value = state.settings?.emailAccessToken || "";
+    }
     if (box) {
         box.innerHTML = buildDailyReportHtml();
     }
     if (modal) modal.classList.add("open");
+}
+
+async function saveEmailTokenFromModal() {
+    const tokInput = document.getElementById("emailAccessTokenInput");
+    if (!tokInput) return;
+    const val = tokInput.value.trim();
+    if (!state.settings) state.settings = {};
+    state.settings.emailAccessToken = val;
+    await saveStateToServer();
+    if (val) {
+        addLog("📧 E-mailový token (PostMail / Web3Forms) uložený pre automatické 09:00 reporty na mt.banovic@gmail.com.", "success");
+        alert("✅ E-mailový token uložený! Teraz môžete kliknúť na '📧 Poslať teraz na mt.banovic@gmail.com' a taktiež sa bude posielať automaticky každé ráno o 09:00.");
+    } else {
+        alert("Token bol vymazaný.");
+    }
+}
+
+async function checkAutoDailyEmail0900() {
+    try {
+        const skNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Bratislava" }));
+        const yyyy = skNow.getFullYear();
+        const mm = String(skNow.getMonth() + 1).padStart(2, "0");
+        const dd = String(skNow.getDate()).padStart(2, "0");
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+        if (skNow.getHours() >= 9 && state.lastEmailReportDate !== todayStr && state.settings?.emailAccessToken) {
+            state.lastEmailReportDate = todayStr;
+            await saveStateToServer();
+            await sendDailyReportEmailNow(true);
+        }
+    } catch (e) {
+        console.warn("09:00 auto-email check warning:", e);
+    }
 }
 
 function closeDailyReportModal() {
@@ -2128,13 +2189,20 @@ function buildDailyReportHtml() {
     `;
 }
 
-async function sendDailyReportEmailNow() {
+async function sendDailyReportEmailNow(isSilentAuto = false) {
     const btn = document.getElementById("btnSendEmailNow");
-    if (btn) {
+    if (btn && !isSilentAuto) {
         btn.disabled = true;
         btn.textContent = "⏳ Odosielam na mt.banovic@gmail.com...";
     }
     try {
+        const tokInput = document.getElementById("emailAccessTokenInput");
+        if (tokInput && tokInput.value.trim()) {
+            state.settings.emailAccessToken = tokInput.value.trim();
+            await saveStateToServer();
+        }
+        const token = (state.settings?.emailAccessToken || "").trim();
+
         const closed = state.portfolio.closedTrades || [];
         const positions = state.portfolio.positions || [];
         const totalEquity = getTotalPortfolioEquityEur();
@@ -2144,38 +2212,103 @@ async function sendDailyReportEmailNow() {
         const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 4);
         const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
 
-        const emailPayload = {
-            _subject: `📊 Denný AI Burzový Report | Hodnota: ${totalEquity.toFixed(2)} € (${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
-            _template: "table",
-            _captcha: "false",
-            "Dátum a Čas": new Date().toLocaleString("sk-SK"),
-            "Celková Hodnota Portfólia": `${totalEquity.toFixed(2)} € (Štart: 100.00 € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
-            "Hotovosť a Otvorené Pozície": `Hotovosť: ${state.portfolio.cashEur.toFixed(2)} € | Otvorené: ${positions.map(p => `${p.symbol} (${p.leverage || 10}x @ ${p.entryPriceUsd}$)`).join(", ") || "Žiadne"}`,
-            "Bilancia Obchodov": `Spolu: ${closed.length} obchodov | Výhry: ${wins.length} | Straty: ${losses.length} | Generácia AI: #${state.learning.generation}`,
-            "TOP Výherné Obchody": sortedBest.map(t => `${t.symbol}: +${t.pnlEur.toFixed(2)} € (+${t.pnlPct.toFixed(2)}%) [${t.openedAt}->${t.closedAt}]`).join(" | ") || "Žiadne",
-            "Najväčšie Straty": sortedWorst.map(t => `${t.symbol}: ${t.pnlEur.toFixed(2)} € (${t.pnlPct.toFixed(2)}%) [${t.exitReason}]`).join(" | ") || "Žiadne",
-            "Posledných 5 Akcií": closed.slice(0, 5).map(t => `[${t.closedAt}] ${t.symbol}: ${t.pnlEur >= 0 ? "+" : ""}${t.pnlEur.toFixed(2)} € (${t.exitReason})`).join(" || ")
-        };
+        const subject = `📊 Denný AI Burzový Report | Hodnota: ${totalEquity.toFixed(2)} € (${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`;
+        const bodyText = [
+            `📊 DENNÝ SÚHRN & SEBAREFLEXIA AI BURZOVÉHO AGENTA`,
+            `Dátum a čas: ${new Date().toLocaleString("sk-SK")}`,
+            `------------------------------------------------------------`,
+            `💰 CELKOVÁ HODNOTA PORTFÓLIA: ${totalEquity.toFixed(2)} € (Štart: 100.00 € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
+            `💵 Hotovosť: ${state.portfolio.cashEur.toFixed(2)} €`,
+            `📂 Otvorené pozície (${positions.length}): ${positions.map(p => `${p.symbol} (${p.leverage || 5}x @ ${p.entryPriceUsd})`).join(", ") || "Žiadne"}`,
+            `📈 Bilancia obchodov: Spolu ${closed.length} | Výhry: ${wins.length} | Straty: ${losses.length} | Generácia AI: #${state.learning.generation}`,
+            ``,
+            `🏆 TOP VÝHERNÉ OBCHODY:`,
+            sortedBest.map(t => `  • ${t.symbol}: +${t.pnlEur.toFixed(2)} € (+${t.pnlPct.toFixed(2)}%) [${t.openedAt} -> ${t.closedAt}]`).join("\n") || "  Žiadne",
+            ``,
+            `⚠️ NAJVÄČŠIE STRATY A POUČENIE:`,
+            sortedWorst.map(t => `  • ${t.symbol}: ${t.pnlEur.toFixed(2)} € (${t.pnlPct.toFixed(2)}%) [${t.exitReason}]`).join("\n") || "  Žiadne",
+            ``,
+            `🕒 POSLEDNÝCH 8 OBCHODOV:`,
+            closed.slice(0, 8).map(t => `  • [${t.closedAt}] ${t.symbol}: ${t.pnlEur >= 0 ? "+" : ""}${t.pnlEur.toFixed(2)} € (${t.exitReason})`).join("\n") || "  Žiadne"
+        ].join("\n");
 
-        const res = await fetch("https://formsubmit.co/ajax/mt.banovic@gmail.com", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            },
-            body: JSON.stringify(emailPayload)
-        });
-        const data = await res.json();
-        if (data && (data.success === "true" || data.success === true)) {
-            alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com!");
-            addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
-        } else {
-            alert("📬 E-mailová brána odpovedala: " + (data.message || "Odoslané – ak ste ešte nepotvrdili aktiváciu vo svojom Gmaile (od FormSubmit), kliknite v Gmaile na 'Activate Form'."));
+        // 1. If user entered PostMail or Web3Forms token, send via their 100% live API
+        if (token) {
+            const isUuid = token.includes("-");
+            if (isUuid) {
+                // Web3Forms
+                const wRes = await fetch("https://api.web3forms.com/submit", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify({
+                        access_key: token,
+                        subject: subject,
+                        from_name: "Autonomny AI Burzovy Agent",
+                        message: bodyText
+                    })
+                });
+                const wData = await wRes.json();
+                if (wData && wData.success) {
+                    if (!isSilentAuto) alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com (cez Web3Forms)!");
+                    addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
+                    return;
+                }
+            } else {
+                // PostMail (https://postmail.invotes.com/send)
+                const formBody = new URLSearchParams({
+                    access_token: token,
+                    subject: subject,
+                    text: bodyText
+                });
+                const pRes = await fetch("https://postmail.invotes.com/send", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: formBody.toString()
+                });
+                if (pRes.ok || pRes.status === 200 || pRes.status === 302) {
+                    if (!isSilentAuto) alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com (cez PostMail)!");
+                    addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
+                    return;
+                }
+            }
+        }
+
+        // 2. Try FormSubmit as secondary fallback
+        let formSubmitSuccess = false;
+        try {
+            const res = await fetch("https://formsubmit.co/ajax/mt.banovic@gmail.com", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ _subject: subject, _captcha: "false", message: bodyText })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && (data.success === "true" || data.success === true)) {
+                    formSubmitSuccess = true;
+                    if (!isSilentAuto) alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com!");
+                    addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
+                    return;
+                }
+            }
+        } catch (errFs) {
+            console.warn("FormSubmit fallback unavailable (HTTP 521):", errFs);
+        }
+
+        // 3. If no token is saved yet and FormSubmit has outage (HTTP 521), guide user & offer 1-click Gmail send
+        if (!isSilentAuto && !formSubmitSuccess) {
+            const openGmail = confirm(
+                "📬 Automatická brána PostMail čaká na váš 'access_token' (práve sme vám ho nechali poslať na váš Gmail mt.banovic@gmail.com od služby PostMail / Invotes – skontrolujte doručenú poštu alebo SPAM a vložte ho do políčka hore v tomto okne).\n\n" +
+                "Chcete zatiaľ tento denný report odoslať okamžite jedným klikom priamo cez váš Gmail?"
+            );
+            if (openGmail) {
+                const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent("mt.banovic@gmail.com")}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+                window.open(gmailUrl, "_blank");
+            }
         }
     } catch (e) {
-        alert("❌ Chyba pri odosielaní e-mailu: " + e.message);
+        if (!isSilentAuto) alert("❌ Chyba pri odosielaní e-mailu: " + e.message);
     } finally {
-        if (btn) {
+        if (btn && !isSilentAuto) {
             btn.disabled = false;
             btn.textContent = "📧 Poslať teraz na mt.banovic@gmail.com";
         }
