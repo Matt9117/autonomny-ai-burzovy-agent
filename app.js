@@ -179,8 +179,22 @@ async function loadStateFromServer() {
             state.learning.tickerMemory = Object.assign({}, data.learning?.tickerMemory || {});
             state.settings = Object.assign({}, DEFAULT_STATE.settings, data.settings);
 
+            if (!state.learning.weights || state.learning.weights.trend < 18 || state.learning.weights.sentiment > 25) {
+                state.learning.weights = { trend: 30, macd: 24, rsi: 20, volume: 14, sentiment: 12 };
+            }
+            if (!state.learning.adaptiveRules) {
+                state.learning.adaptiveRules = {
+                    maxBuyRsi: 64.0,
+                    requirePositiveVolume: true,
+                    cooldownMinutesAfterLoss: 120
+                };
+            }
+            if (!Array.isArray(state.learning.learnedTradeIds)) {
+                state.learning.learnedTradeIds = (state.portfolio.closedTrades || []).map(t => t.id).filter(Boolean);
+            }
+
             if (wasPreV4 || data.stateResetId !== "v7_clean_11750") {
-                state.version = 7;
+                state.version = 8;
                 state.stateResetId = "v7_clean_11750";
                 state.settings.leverage = 5;
                 state.settings.maxPositions = 3;
@@ -193,6 +207,8 @@ async function loadStateFromServer() {
                 state.learning.takeProfitPct = 2.8;
                 state.learning.trailingTriggerPct = 0.45;
                 state.learning.trailingDistancePct = 0.30;
+                state.learning.weights = { trend: 30, macd: 24, rsi: 20, volume: 14, sentiment: 12 };
+                state.learning.adaptiveRules = { maxBuyRsi: 63.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
                 state.portfolio.initialCapitalEur = 100.00;
                 state.portfolio.cashEur = 117.50;
                 state.portfolio.positions = [];
@@ -286,8 +302,9 @@ async function loadStateFromServer() {
                 }
                 await saveStateToServer();
             }
+            reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 V6 Shield & Hyper-Growth Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 V8 True Mistake-Learning & Shield Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -607,41 +624,53 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
     const dynamicSlPct = Math.round(Math.max(0.8, Math.min(3.5, atrObj.atrPct * slMult)) * 100) / 100;
     const dynamicTpPct = Math.round(Math.max(1.5, Math.min(6.5, atrObj.atrPct * tpMult)) * 100) / 100;
 
-    // 6. Per-Ticker Reputation Memory & Best Factor Boost
+    // 6. Per-Ticker Reputation Memory, Cooldown & Best Factor Boost
     const mem = (state.learning.tickerMemory && state.learning.tickerMemory[symbol]) || null;
     const w = { ...state.learning.weights };
     let reputationBonus = 0;
 
-    if (mem && mem.trades >= 2) {
+    if (mem && mem.trades >= 1) {
         reputationBonus = mem.reputationBonus || 0;
+        // If ticker is in post-loss Cooldown, block entry with -120 penalty
+        if (mem.cooldownUntil && Date.now() < mem.cooldownUntil) {
+            reputationBonus = Math.min(reputationBonus, -120);
+        }
         // Boost the indicator that historically works best for this specific stock!
-        if (mem.bestFactor && w[mem.bestFactor] !== undefined) {
+        if (mem.bestFactor && w[mem.bestFactor] !== undefined && reputationBonus > -50) {
             w[mem.bestFactor] += 10;
         }
     }
 
-    const totalWeight = (w.rsi + w.trend + w.macd + w.volume + w.sentiment) || 100;
+    // Do not dilute technical score with 0 when there is no breaking news on this ticker!
+    const activeSentWeight = sentScore !== 0 ? (w.sentiment || 12) : 0;
+    const totalWeight = (w.rsi + w.trend + w.macd + w.volume + activeSentWeight) || 100;
     const rawComposite = (
         (rsiScore * w.rsi) +
         (trendScore * w.trend) +
         (macdScore * w.macd) +
         (volumeScore * w.volume) +
-        (sentScore * w.sentiment)
+        (sentScore * activeSentWeight)
     ) / totalWeight;
 
-    // V5 Hyper-Growth Filters:
-    // 1. Anti-FOMO / Exhaustion Guard (do not buy at the top of an overextended candle)
+    // V5/V8 Adaptive Mistake-Learned Filters:
+    const rules = state.learning.adaptiveRules || { maxBuyRsi: 64.0, requirePositiveVolume: true };
+    const maxAllowedRsi = Number(rules.maxBuyRsi || 64.0);
+    // 1. Anti-FOMO / Exhaustion Guard (adapts downward whenever agent loses on an overbought entry!)
     const curPrice = closes[closes.length - 1] || 0;
     const distFromEma9Pct = ema9 > 0 ? ((curPrice - ema9) / ema9) * 100 : 0;
     let v5Adjustment = 0;
-    if (rsi > 67 || distFromEma9Pct > Math.max(1.1, atrObj.atrPct * 2.0)) {
-        v5Adjustment -= 35;
+    if (rsi > maxAllowedRsi || distFromEma9Pct > Math.max(1.1, atrObj.atrPct * 2.0)) {
+        v5Adjustment -= 38;
     }
-    // 2. Minimum Volatility Filter (avoid slow/dead stocks like LMT with 5m ATR < 0.25%)
+    // 2. Adaptive Volume Confirmation Guard (learned from fakeout losses)
+    if (rules.requirePositiveVolume && volumeScore < 0) {
+        v5Adjustment -= 18;
+    }
+    // 3. Minimum Volatility Filter (avoid slow/dead stocks like LMT with 5m ATR < 0.25%)
     if (atrObj.atrPct < 0.25 && !symbol.endsWith("-USD")) {
         v5Adjustment -= 28;
     }
-    // 3. US Regular Session Priority Boost for 3x Leveraged / Inverse ETFs
+    // 4. US Regular Session Priority Boost for 3x Leveraged / Inverse ETFs
     const sessionInfo = getMarketSessionInfo();
     if (sessionInfo.session === "REGULAR" && MARKET_PACKS.leveraged.includes(symbol) && curPrice > ema9 && macdObj.hist > 0) {
         v5Adjustment += 9;
@@ -1172,6 +1201,8 @@ async function executeBuyPosition(mkt, amountEur) {
         openedAt: new Date().toLocaleTimeString("sk-SK"),
         openedTimestamp: 0, // Disarms legacy RAM worker 15m rotation
         openedTs: Date.now(),
+        entryRsi: mkt.rsi || 50,
+        entryAtrPct: mkt.atrPct || 0.5,
         reason: reasonParts.join(" | "),
         entryFactors: { ...mkt.factors }
     };
@@ -1257,15 +1288,46 @@ function closeAllPositions(reason = "Manuálny predaj všetkých pozícií") {
 // DEEP SELF-LEARNING ENGINE (GLOBAL WEIGHTS + PER-STOCK MEMORY + ATR TUNING)
 // ============================================================================
 
+function reconcileUnlearnedClosedTrades() {
+    if (!state.learning) return;
+    if (!Array.isArray(state.learning.learnedTradeIds)) {
+        state.learning.learnedTradeIds = [];
+    }
+    const closed = state.portfolio?.closedTrades || [];
+    for (let i = closed.length - 1; i >= 0; i--) {
+        const t = closed[i];
+        if (!t || !t.id) continue;
+        if (!state.learning.learnedTradeIds.includes(t.id)) {
+            state.learning.learnedTradeIds.push(t.id);
+            const cleanSym = String(t.symbol || "").replace(/\s*\(\d+x\)/i, "").trim();
+            const syntheticPos = {
+                id: t.id,
+                symbol: cleanSym,
+                entryPriceUsd: t.entryPriceUsd,
+                entryRsi: t.entryRsi || 55,
+                entryFactors: t.entryFactors || { rsi: 25, trend: 45, macd: 40, volume: 20, sentiment: 0 }
+            };
+            const lesson = learnFromClosedTrade(syntheticPos, Number(t.pnlEur || 0), Number(t.pnlPct || 0), false);
+            t.lesson = lesson;
+        }
+    }
+    if (state.learning.learnedTradeIds.length > 200) {
+        state.learning.learnedTradeIds = state.learning.learnedTradeIds.slice(-200);
+    }
+}
+
 function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
-    const factors = pos.entryFactors || { rsi: 20, trend: 20, macd: 20, volume: 20, sentiment: 20 };
+    const factors = pos.entryFactors || { rsi: 20, trend: 30, macd: 25, volume: 15, sentiment: 0 };
     const w = state.learning.weights;
     state.learning.generation += 1;
     state.learning.totalTrainedTrades = (state.learning.totalTrainedTrades || 0) + 1;
     const gen = state.learning.generation;
+    if (pos.id && Array.isArray(state.learning.learnedTradeIds) && !state.learning.learnedTradeIds.includes(pos.id)) {
+        state.learning.learnedTradeIds.push(pos.id);
+    }
 
     const reward = Math.max(-1.2, Math.min(1.2, pnlPct / 1.5));
-    const learningRate = isBacktest ? 0.025 : 0.08;
+    const learningRate = isBacktest ? 0.02 : 0.06;
 
     const factorNames = {
         rsi: "RSI",
@@ -1275,39 +1337,62 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
         sentiment: "Sentiment správ"
     };
 
+    const bounds = {
+        trend: [22, 36],
+        macd: [18, 30],
+        rsi: [15, 26],
+        volume: [12, 24],
+        sentiment: [10, 20]
+    };
+
     let bestFactor = "trend";
+    let worstFactor = "rsi";
     let maxContribution = -999;
+    let minContribution = 999;
 
     for (const key of Object.keys(w)) {
-        const fVal = (factors[key] || 0) / 100;
+        const rawF = factors[key] || 0;
+        const fVal = rawF / 100;
         if (fVal > maxContribution) {
             maxContribution = fVal;
             bestFactor = key;
         }
-        const delta = reward * fVal * learningRate * 100;
-        w[key] = Math.max(8, Math.min(45, w[key] + delta));
+        if (fVal < minContribution) {
+            minContribution = fVal;
+            worstFactor = key;
+        }
+        // Only adjust weight if this indicator actually fired (prevents sentiment=0 drift bug!)
+        if (Math.abs(fVal) > 0.05) {
+            const delta = reward * fVal * learningRate * 100;
+            const [minB, maxB] = bounds[key] || [10, 35];
+            w[key] = Math.max(minB, Math.min(maxB, w[key] + delta));
+        }
     }
 
-    // Normalize global weights to sum to 100
+    // Normalize global weights to sum to 100 while respecting bounds
     const sumW = w.rsi + w.trend + w.macd + w.volume + w.sentiment;
     for (const key of Object.keys(w)) {
-        w[key] = Math.round((w[key] / sumW) * 100);
+        const [minB, maxB] = bounds[key] || [10, 35];
+        w[key] = Math.max(minB, Math.min(maxB, Math.round((w[key] / sumW) * 100)));
     }
     const diff = 100 - (w.rsi + w.trend + w.macd + w.volume + w.sentiment);
-    w.trend += diff;
+    w.trend = Math.max(20, w.trend + diff);
 
-    // Update Per-Ticker Memory (Ticker Reputation & Best Indicator per Stock)
+    // Update Per-Ticker Memory (Ticker Reputation, Cooldown & Strike Ban System)
     if (!state.learning.tickerMemory) state.learning.tickerMemory = {};
-    const sym = pos.symbol;
+    const sym = String(pos.symbol || "").replace(/\s*\(\d+x\)/i, "").trim();
+    const wasBlacklisted = (state.learning.tickerMemory[sym]?.reputationBonus <= -100);
     if (!state.learning.tickerMemory[sym]) {
         state.learning.tickerMemory[sym] = {
             trades: 0,
             wins: 0,
             losses: 0,
+            consecutiveLosses: 0,
             totalPnlPct: 0,
             avgPnlPct: 0,
             winRate: 50,
             reputationBonus: 0,
+            cooldownUntil: 0,
             bestFactor: "trend",
             factorScores: { rsi: 0, trend: 0, macd: 0, volume: 0 }
         };
@@ -1315,13 +1400,20 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
 
     const tm = state.learning.tickerMemory[sym];
     tm.trades += 1;
-    if (pnlPct > 0) tm.wins += 1;
-    else tm.losses += 1;
+    if (pnlPct > 0) {
+        tm.wins += 1;
+        tm.consecutiveLosses = 0;
+        tm.cooldownUntil = 0;
+    } else {
+        tm.losses = (tm.losses || 0) + 1;
+        tm.consecutiveLosses = (tm.consecutiveLosses || 0) + 1;
+    }
     tm.totalPnlPct = Math.round((tm.totalPnlPct + pnlPct) * 100) / 100;
     tm.avgPnlPct = Math.round((tm.totalPnlPct / tm.trades) * 100) / 100;
     tm.winRate = Math.round((tm.wins / tm.trades) * 100);
 
     // Track which technical factor works best on this specific stock
+    if (!tm.factorScores) tm.factorScores = { rsi: 0, trend: 0, macd: 0, volume: 0 };
     for (const fk of ["rsi", "trend", "macd", "volume"]) {
         const fVal = (factors[fk] || 0) / 100;
         tm.factorScores[fk] = (tm.factorScores[fk] || 0) + reward * fVal;
@@ -1329,12 +1421,38 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
     const sortedStockFactors = Object.entries(tm.factorScores).sort((a, b) => b[1] - a[1]);
     tm.bestFactor = sortedStockFactors[0][0];
 
-    // Calculate Reputation Bonus (-18 to +18 points)
-    // High win-rate & positive avgPnl stocks get boosted; choppy money-losers get penalized
-    if (tm.trades >= 2) {
-        const winRateDelta = (tm.winRate - 50) * 0.25; // -12.5 to +12.5
-        const pnlDelta = tm.avgPnlPct * 4.5;
-        tm.reputationBonus = Math.round(Math.max(-18, Math.min(18, winRateDelta + pnlDelta)));
+    // Calculate Reputation Bonus & Automatic Strike Blacklist
+    if (wasBlacklisted || (!isBacktest && (tm.consecutiveLosses >= 2 || pnlPct <= -8.0))) {
+        tm.reputationBonus = -200; // Permanent ban after 2 consecutive losses or heavy loss
+        tm.blacklisted = true;
+    } else if (!isBacktest && pnlPct < 0) {
+        // Immediate -22 penalty + 2-hour cooldown so agent NEVER immediately re-buys a losing stock!
+        tm.reputationBonus = Math.max(-60, (tm.reputationBonus || 0) - 22);
+        tm.cooldownUntil = Date.now() + 2 * 3600 * 1000;
+    } else if (tm.trades >= 2) {
+        const winRateDelta = (tm.winRate - 50) * 0.25;
+        const pnlDelta = tm.avgPnlPct * 2.5;
+        tm.reputationBonus = Math.round(Math.max(-25, Math.min(18, winRateDelta + pnlDelta)));
+    }
+
+    // Root-Cause Mistake Classifier (Adapts entry rules when a live trade loses)
+    if (!state.learning.adaptiveRules) {
+        state.learning.adaptiveRules = { maxBuyRsi: 63.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
+    }
+    const rules = state.learning.adaptiveRules;
+    let mistakeDiagnosis = "";
+
+    if (!isBacktest && pnlEur < 0) {
+        const entryRsi = Number(pos.entryRsi || 55);
+        if (entryRsi >= 60) {
+            rules.maxBuyRsi = Math.max(55.0, Math.round((rules.maxBuyRsi - 1.5) * 10) / 10);
+            mistakeDiagnosis = `Nákup príliš vysoko (RSI ${entryRsi.toFixed(1)}) → Max povolené RSI znížené na ${rules.maxBuyRsi}`;
+        } else if ((factors.volume || 0) < 25) {
+            rules.requirePositiveVolume = true;
+            mistakeDiagnosis = `Slabý objem pri vstupe → Aktivovaný prísny filter objemu (RVOL)`;
+        } else {
+            mistakeDiagnosis = `Falošný prieraz pri ${factorNames[bestFactor]} → Váha ${factorNames[bestFactor]} znížená na ${w[bestFactor]}%`;
+        }
     }
 
     // Tune ATR Stop-Loss / Take-Profit multipliers slightly based on outcome
@@ -1342,8 +1460,7 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
     if (!state.learning.tpAtrMultiplier) state.learning.tpAtrMultiplier = 4.5;
 
     if (pnlPct < -1.0) {
-        // Tightened slightly or widen if premature stop
-        state.learning.slAtrMultiplier = Math.round(Math.min(3.2, state.learning.slAtrMultiplier + 0.03) * 100) / 100;
+        state.learning.slAtrMultiplier = Math.round(Math.min(3.0, state.learning.slAtrMultiplier + 0.02) * 100) / 100;
     } else if (pnlPct > 1.2) {
         state.learning.tpAtrMultiplier = Math.round(Math.min(5.8, state.learning.tpAtrMultiplier + 0.03) * 100) / 100;
     }
@@ -1354,11 +1471,14 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
     let lesson = "";
     if (!isBacktest) {
         if (pnlEur > 0) {
-            state.learning.minScoreThreshold = Math.max(23, state.learning.minScoreThreshold - 1);
-            lesson = `Gen #${gen} (${sym} +${pnlPct.toFixed(2)}%): Potvrdený faktor ${factorNames[bestFactor]}. Reputácia ${sym}: ${tm.winRate}% Win (${tm.reputationBonus >= 0 ? "+" : ""}${tm.reputationBonus}b).`;
+            state.learning.minScoreThreshold = Math.max(36, state.learning.minScoreThreshold - 1);
+            lesson = `✅ Gen #${gen} (${sym} +${pnlPct.toFixed(2)}%): Potvrdený ${factorNames[bestFactor]} (${w[bestFactor]}%). Reputácia ${sym}: ${tm.winRate}% W (${tm.reputationBonus >= 0 ? "+" : ""}${tm.reputationBonus}b).`;
         } else {
-            state.learning.minScoreThreshold = Math.min(40, state.learning.minScoreThreshold + 1);
-            lesson = `Gen #${gen} (${sym} ${pnlPct.toFixed(2)}%): Falošný signál pri ${factorNames[bestFactor]}. Reputácia ${sym} upravená na ${tm.reputationBonus}b, prah istoty ${state.learning.minScoreThreshold}b.`;
+            state.learning.minScoreThreshold = Math.min(48, state.learning.minScoreThreshold + 2);
+            const banStatus = tm.reputationBonus <= -100
+                ? `⛔ TRVALÝ BAN (-200b)`
+                : `⏳ 2h Cooldown + penalizácia (${tm.reputationBonus}b)`;
+            lesson = `🛠️ Gen #${gen} POUČENIE ZO STRATY (${sym} ${pnlPct.toFixed(2)}%): ${mistakeDiagnosis}. ${sym} → ${banStatus}, prah istoty zvýšený na ${state.learning.minScoreThreshold}b.`;
         }
 
         state.learning.lessons.unshift({
