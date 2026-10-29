@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Autonómny AI Burzový Agent | 100 € Paper & Live Trading</title>
+    <title>Autonómny AI Burzový Agent | 1 000 € Day-Trading & Trading 212 Engine</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand">
             <div class="brand-icon">AI</div>
             <div class="brand-title">
-                <h1>Autonómny Burzový Agent <span id="modeBadge" class="badge badge-warn" style="margin-left:8px;">PAPER TRADING (100 €)</span></h1>
+                <h1>Autonómny Burzový Agent <span id="modeBadge" class="badge badge-warn" style="margin-left:8px;">PAPER TRADING (1 000 €)</span></h1>
                 <div class="brand-subtitle">
                     <span id="marketSessionStatus">Načítavam stav burzy...</span>
                     <span>•</span>
@@ -61,16 +61,16 @@
         <section class="kpi-grid">
             <div class="kpi-card">
                 <div class="kpi-label">
-                    <span>Celková hodnota účtu (Cieľ: 500 €)</span>
+                    <span>Celková hodnota účtu (Cieľ: 5 000 €)</span>
                     <span id="totalPnlBadge" class="badge badge-neutral">0.00 %</span>
                 </div>
                 <div class="kpi-value">
-                    <span id="kpiEquity">100.00 €</span>
+                    <span id="kpiEquity">1000.00 €</span>
                 </div>
                 <div>
                     <div class="kpi-sub">
                         <span>Čistý zisk: <strong id="kpiTotalPnl">0.00 €</strong></span>
-                        <span id="goalProgressLabel" style="color:var(--accent-cyan); font-weight:700;">Progres k 500 €: 0%</span>
+                        <span id="goalProgressLabel" style="color:var(--accent-cyan); font-weight:700;">Progres k 5 000 €: 20%</span>
                     </div>
                     <div class="progress-bar">
                         <div id="goalProgressBar" class="progress-fill" style="width: 2%; background: linear-gradient(90deg, #10b981, #06b6d4);"></div>
@@ -81,10 +81,10 @@
             <div class="kpi-card">
                 <div class="kpi-label">
                     <span>Voľný kapitál vs. V pozíciách</span>
-                    <span id="openPosCountBadge" class="badge badge-neutral">0 / 4 pozície</span>
+                    <span id="openPosCountBadge" class="badge badge-neutral">0 / 7 pozícií</span>
                 </div>
                 <div class="kpi-value">
-                    <span id="kpiCash">100.00 €</span>
+                    <span id="kpiCash">1000.00 €</span>
                     <span style="font-size:14px; font-weight:500; color:var(--text-secondary);">voľné</span>
                 </div>
                 <div>
@@ -436,7 +436,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:18px; flex-wrap:wrap; gap:10px;">
                     <div style="display:flex; gap:8px;">
                         <button class="btn btn-danger" onclick="resetSimulatorAccount()">
-                            🗑️ Resetovať účet na 100 €
+                            🗑️ Resetovať účet na 1 000 €
                         </button>
                         <button class="btn" onclick="testBrokerConnection()">
                             🔌 Otestovať API brokera
@@ -471,6 +471,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=9"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>
