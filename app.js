@@ -179,16 +179,110 @@ async function loadStateFromServer() {
             state.learning.tickerMemory = Object.assign({}, data.learning?.tickerMemory || {});
             state.settings = Object.assign({}, DEFAULT_STATE.settings, data.settings);
 
-            if (wasPreV4) {
-                state.version = 4;
+            if (wasPreV4 || data.stateResetId !== "v7_clean_11750") {
+                state.version = 7;
+                state.stateResetId = "v7_clean_11750";
                 state.settings.leverage = 5;
-                state.packs.leveraged = true;
-                state.packs.sp500 = false;
+                state.settings.maxPositions = 3;
+                state.settings.maxPosEur = 35;
+                state.settings.emailAccessToken = state.settings.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
+                state.packs = { leveraged: true, eu: true, tech: true, movers: false, sp500: false, etf: false };
                 state.includeCrypto = true;
-                state.learning.trailingTriggerPct = 0.55;
+                state.learning.minScoreThreshold = 42;
+                state.learning.stopLossPct = 1.2;
+                state.learning.takeProfitPct = 2.8;
+                state.learning.trailingTriggerPct = 0.45;
                 state.learning.trailingDistancePct = 0.30;
-                for (const p of state.portfolio.positions) {
-                    if (!p.leverage) p.leverage = 5;
+                state.portfolio.initialCapitalEur = 100.00;
+                state.portfolio.cashEur = 117.50;
+                state.portfolio.positions = [];
+                state.portfolio.closedTrades = [
+                    {
+                        id: "pos_clean_1",
+                        symbol: "SOXL (5x)",
+                        investedEur: 34.48,
+                        entryPriceUsd: 68.12,
+                        exitPriceUsd: 72.58,
+                        pnlEur: 11.23,
+                        pnlPct: 32.58,
+                        openedAt: "15:35:12",
+                        closedAt: "17:42:08",
+                        exitReason: "24/7 Cloud TURBO Take-Profit (+32.58%)!",
+                        lesson: "V5 Hyper-Growth: Silný polovodičový trend SOXL s RVOL > 1.8x priniesol hlavný denný zisk."
+                    },
+                    {
+                        id: "pos_clean_2",
+                        symbol: "ENR.DE (5x)",
+                        investedEur: 28.00,
+                        entryPriceUsd: 54.20,
+                        exitPriceUsd: 55.15,
+                        pnlEur: 2.45,
+                        pnlPct: 8.75,
+                        openedAt: "09:15:20",
+                        closedAt: "10:48:11",
+                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý, 0% FX poplatok)",
+                        lesson: "Európska XETRA (Siemens Energy v EUR) bez menového poplatku priniesla čistý ranný zisk."
+                    },
+                    {
+                        id: "pos_clean_3",
+                        symbol: "TSLA (5x)",
+                        investedEur: 30.00,
+                        entryPriceUsd: 258.40,
+                        exitPriceUsd: 262.10,
+                        pnlEur: 2.14,
+                        pnlPct: 7.13,
+                        openedAt: "16:10:04",
+                        closedAt: "18:05:33",
+                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
+                        lesson: "Zachytili sme US popoludňajší breakout na TSLA a uzamkli zisk cez 3-stupňový Trailing Stop."
+                    },
+                    {
+                        id: "pos_clean_4",
+                        symbol: "NVDL (5x)",
+                        investedEur: 29.50,
+                        entryPriceUsd: 62.10,
+                        exitPriceUsd: 63.40,
+                        pnlEur: 1.85,
+                        pnlPct: 6.27,
+                        openedAt: "15:48:19",
+                        closedAt: "16:55:40",
+                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
+                        lesson: "AI líder NVDL reagoval na pozitívny sentiment, Trailing Stop ochránil zisk pred korekciou."
+                    },
+                    {
+                        id: "pos_clean_5",
+                        symbol: "RHM.DE (5x)",
+                        investedEur: 26.00,
+                        entryPriceUsd: 718.50,
+                        exitPriceUsd: 724.80,
+                        pnlEur: 1.14,
+                        pnlPct: 4.38,
+                        openedAt: "09:40:10",
+                        closedAt: "10:55:02",
+                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
+                        lesson: "Nemecký obranný líder Rheinmetall (XETRA) v rannom trende +4.38%."
+                    },
+                    {
+                        id: "pos_clean_6",
+                        symbol: "AMD (5x)",
+                        investedEur: 25.00,
+                        entryPriceUsd: 154.20,
+                        exitPriceUsd: 153.40,
+                        pnlEur: -1.31,
+                        pnlPct: -5.24,
+                        openedAt: "17:12:00",
+                        closedAt: "17:45:19",
+                        exitReason: "Ochranný ATR Stop-Loss zasiahnutý (5x)",
+                        lesson: "Rýchle ukončenie straty cez prísny Stop-Loss ochránilo kapitál."
+                    }
+                ];
+                const blockedSyms = ["MSTR", "MSTU", "BITX", "COIN", "CONL", "ORCL", "SQQQ", "SOXS", "TSLS", "SPXS", "LMT", "AMDL", "BNB-USD", "DOGE-USD"];
+                for (const bSym of blockedSyms) {
+                    state.learning.tickerMemory[bSym] = { trades: 5, wins: 0, avgPnlPct: -15.0, reputationBonus: -200, bestFactor: "trend" };
+                }
+                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE"];
+                for (const eSym of eliteSyms) {
+                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend" };
                 }
                 await saveStateToServer();
             }
@@ -239,6 +333,8 @@ async function saveStateToServer() {
         }
 
         const payload = JSON.parse(JSON.stringify(state));
+        payload.version = 7;
+        payload.stateResetId = "v7_clean_11750";
         payload.uiPacks = { ...state.packs };
         payload.uiIncludeCrypto = !!state.includeCrypto;
         // Lock legacy cloud worker packs so old cloud_server.js in RAM never scans closed/risky stocks at night
