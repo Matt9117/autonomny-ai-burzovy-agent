@@ -215,8 +215,8 @@ async function loadStateFromServer() {
         const res = await fetch("/api/state");
         const data = await res.json();
         if (data && data.version) {
-            const wasPreV4 = (data.version < 4);
             state = Object.assign({}, DEFAULT_STATE, data);
+            state.agentActive = (data.uiAgentActive !== undefined) ? !!data.uiAgentActive : true;
             state.packs = Object.assign({}, DEFAULT_STATE.packs, data.uiPacks || data.packs);
             if (data.uiIncludeCrypto !== undefined) {
                 state.includeCrypto = !!data.uiIncludeCrypto;
@@ -229,6 +229,7 @@ async function loadStateFromServer() {
             state.learning.weights = Object.assign({}, DEFAULT_STATE.learning.weights, data.learning?.weights);
             state.learning.tickerMemory = Object.assign({}, data.learning?.uiTickerMemory || data.learning?.tickerMemory || {});
             state.settings = Object.assign({}, DEFAULT_STATE.settings, data.settings);
+            state.settings.emailAccessToken = state.settings.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
 
             if (!state.learning.weights || state.learning.weights.trend < 18 || state.learning.weights.sentiment > 25) {
                 state.learning.weights = { trend: 28, macd: 22, rsi: 20, volume: 14, sentiment: 16 };
@@ -243,49 +244,17 @@ async function loadStateFromServer() {
             if (!Array.isArray(state.learning.learnedTradeIds)) {
                 state.learning.learnedTradeIds = (state.portfolio.closedTrades || []).map(t => t.id).filter(Boolean);
             }
-
-            if (wasPreV4 || data.stateResetId !== "v11_profit_1000") {
-                state.version = 11;
-                state.stateResetId = "v11_profit_1000";
-                state.settings.leverage = 5;
-                state.settings.maxPositions = 7;
-                state.settings.maxPosEur = 145;
-                state.settings.emailAccessToken = state.settings.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
-                state.packs = { leveraged: true, eu: true, tech: true, movers: false, sp500: false, etf: false };
-                state.includeCrypto = true;
-                state.learning.minScoreThreshold = 38;
-                state.learning.stopLossPct = 0.80;
-                state.learning.takeProfitPct = 2.80;
-                state.learning.trailingTriggerPct = 0.55;
-                state.learning.trailingDistancePct = 0.32;
-                state.learning.weights = { trend: 28, macd: 22, rsi: 20, volume: 14, sentiment: 16 };
-                state.learning.adaptiveRules = { maxBuyRsi: 62.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
+            if (!state.portfolio.initialCapitalEur || state.portfolio.initialCapitalEur < 500) {
                 state.portfolio.initialCapitalEur = 1000.00;
-                state.portfolio.cashEur = 1000.00;
-                state.portfolio.positions = [];
-                state.portfolio.closedTrades = [];
-
-                const blockedSyms = ["MSTR", "MSTU", "BITX", "COIN", "CONL", "ORCL", "SQQQ", "SOXS", "TSLS", "SPXS", "LMT", "AMDL", "BNB-USD", "DOGE-USD"];
-                for (const bSym of blockedSyms) {
-                    state.learning.tickerMemory[bSym] = { trades: 5, wins: 0, avgPnlPct: -15.0, reputationBonus: -200, bestFactor: "trend", blacklisted: true };
-                }
-                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE", "TSM", "SMCI", "AIR.PA", "META", "MSFT"];
-                for (const eSym of eliteSyms) {
-                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend", maxAllowedRsi: 62.5 };
-                }
-                state.learning.lessons.unshift({
-                    time: new Date().toLocaleTimeString("sk-SK"),
-                    gen: state.learning.generation,
-                    text: "🛡️ V11 Profitable Day-Trading Engine (1 000 €): Zrušený panický predaj na 1 červenej sviečke (príčina straty -14 € na SOXL), pridané 4 tvrdé filtre vstupu (zákaz nákupu nad RSI 62.5 a pri US Opening Bell šume), max. Stop-Loss obmedzený na -0.85% a pomer zisku ku strate nastavený na 3:1."
-                });
-                await saveStateToServer();
             }
             if (state.learning.minScoreThreshold > 42 || state.learning.minScoreThreshold < 34) {
                 state.learning.minScoreThreshold = 38;
             }
+            state.version = 12;
+            state.stateResetId = "v12_no_auto_reset";
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 V11 Profitable Engine (1 000 € | Pomer R:R 3:1 | Max RSI 62.5): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 V12 Profitable Engine (1 000 € | Zákaz auto-resetu pri F5 | Early Break-Even +1.3%): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -331,17 +300,19 @@ async function saveStateToServer() {
         }
 
         const payload = JSON.parse(JSON.stringify(state));
-        payload.version = 11;
-        payload.stateResetId = "v11_profit_1000";
+        payload.version = 12;
+        payload.stateResetId = "v12_no_auto_reset";
+        payload.uiAgentActive = !!state.agentActive;
+        // 100% DISARM legacy Oct 27 backgroundHeadlessTick in Render RAM so it NEVER overwrites state or makes rogue trades!
+        payload.agentActive = false;
         payload.uiPacks = { ...state.packs };
         payload.uiIncludeCrypto = !!state.includeCrypto;
-        // Lock legacy cloud worker packs & thresholds so old RAM process never buys overbought tops or chokes winners early!
         payload.packs = { leveraged: false, tech: false, movers: false, sp500: false, etf: false, eu: true };
         payload.includeCrypto = false;
         payload.settings.watchlist = safeServerWatchlist;
         payload.learning.uiMinScoreThreshold = state.learning.minScoreThreshold;
-        payload.learning.minScoreThreshold = 70; // Forces legacy RAM worker to only buy sweet-spot RSI 50-65 A+ setups!
-        payload.learning.trailingTriggerPct = 1.40; // Prevents legacy RAM worker from choking winners at +0.80 EUR!
+        payload.learning.minScoreThreshold = 999;
+        payload.learning.trailingTriggerPct = 1.40;
         payload.learning.trailingDistancePct = 0.35;
         payload.learning.uiTickerMemory = JSON.parse(JSON.stringify(state.learning.tickerMemory || {}));
 
@@ -531,6 +502,94 @@ function computeATR(candles, period = 14) {
     };
 }
 
+// ============================================================================
+// LAYER 1: 10->8->1 MULTI-LAYER PERCEPTRON (MLP) NEURAL NETWORK + BACKPROPAGATION
+// ============================================================================
+
+function ensureNeuralNet() {
+    if (!state.learning) state.learning = {};
+    const nn = state.learning.neuralNet;
+    if (nn && Array.isArray(nn.W1) && nn.W1.length === 8 && Array.isArray(nn.W2) && nn.W2.length === 8) {
+        return nn;
+    }
+    // 10 Input Features -> 8 Hidden Neurons (tanh) -> 1 Output Neuron (sigmoid P(win))
+    // Domain-informed initial synaptic weights so network immediately recognizes non-linear setups
+    const W1 = [
+        // [rsi, trend, macd, vol, priceAct, pullback, mktRegime, session, newsSent, tickerMem]
+        [ 0.35,  0.75,  0.60,  0.40,  0.55,  0.45,  0.40,  0.25,  0.20,  0.35], // Neuron 0: Confirmed Trend Pullback
+        [ 0.20,  0.55,  0.70,  0.80,  0.65,  0.10,  0.35,  0.30,  0.45,  0.25], // Neuron 1: High-Volume Momentum Breakout
+        [-0.85, -0.30, -0.45, -0.50, -0.60, -0.75, -0.35, -0.40, -0.30, -0.30], // Neuron 2: Overbought / Fakeout Trap Detector
+        [ 0.15,  0.45,  0.40,  0.50,  0.40,  0.20,  0.30,  0.20,  0.90,  0.30], // Neuron 3: Breaking News Catalyst Amplifier
+        [ 0.25,  0.60,  0.50,  0.35,  0.45,  0.30,  0.80,  0.45,  0.25,  0.40], // Neuron 4: Market Regime & Sector Alignment
+        [ 0.45,  0.50,  0.65,  0.45,  0.70,  0.35,  0.25,  0.30,  0.15,  0.50], // Neuron 5: Multi-Candle Continuation Pattern
+        [-0.40, -0.65, -0.70, -0.35, -0.75, -0.40, -0.55, -0.30, -0.60, -0.45], // Neuron 6: Bearish Reversal & Knife Shield
+        [ 0.30,  0.40,  0.35,  0.30,  0.35,  0.25,  0.25,  0.20,  0.25,  0.85]  // Neuron 7: Proven Ticker Memory Specialist
+    ];
+    const B1 = [0.05, 0.02, -0.10, 0.0, 0.04, 0.05, -0.08, 0.04];
+    const W2 = [0.65, 0.60, -0.75, 0.50, 0.55, 0.55, -0.70, 0.50];
+    const B2 = 0.08;
+
+    state.learning.neuralNet = {
+        W1,
+        B1,
+        W2,
+        B2,
+        updates: 0
+    };
+    return state.learning.neuralNet;
+}
+
+function forwardNeuralNet(features) {
+    const nn = ensureNeuralNet();
+    const hidden = new Array(8);
+    for (let j = 0; j < 8; j++) {
+        let sum = nn.B1[j] || 0;
+        const row = nn.W1[j];
+        for (let i = 0; i < 10; i++) {
+            sum += (row[i] || 0) * (features[i] || 0);
+        }
+        hidden[j] = Math.tanh(sum);
+    }
+    let outSum = nn.B2 || 0;
+    for (let j = 0; j < 8; j++) {
+        outSum += (nn.W2[j] || 0) * hidden[j];
+    }
+    const prob = 1 / (1 + Math.exp(-Math.max(-8, Math.min(8, outSum))));
+    return { prob, hidden };
+}
+
+function trainNeuralNetBackprop(features, targetWin, lr = 0.035) {
+    if (!Array.isArray(features) || features.length < 10) return;
+    const nn = ensureNeuralNet();
+    const { prob, hidden } = forwardNeuralNet(features);
+    const y = targetWin ? 1.0 : 0.0;
+    // Output error gradient (binary cross-entropy with sigmoid output)
+    const dz2 = prob - y;
+
+    // Backpropagate to hidden layer before mutating W2
+    const dz1 = new Array(8);
+    for (let j = 0; j < 8; j++) {
+        const tanhDeriv = 1 - hidden[j] * hidden[j];
+        dz1[j] = dz2 * nn.W2[j] * tanhDeriv;
+    }
+
+    // Update Output Layer weights W2 & bias B2 (with L2 weight decay to prevent exploding weights)
+    for (let j = 0; j < 8; j++) {
+        nn.W2[j] = Math.max(-2.5, Math.min(2.5, nn.W2[j] - lr * (dz2 * hidden[j] + 0.002 * nn.W2[j])));
+    }
+    nn.B2 = Math.max(-1.5, Math.min(1.5, nn.B2 - lr * dz2));
+
+    // Update Hidden Layer weights W1[8][10] & biases B1[8]
+    for (let j = 0; j < 8; j++) {
+        for (let i = 0; i < 10; i++) {
+            const grad = dz1[j] * (features[i] || 0) + 0.002 * nn.W1[j][i];
+            nn.W1[j][i] = Math.max(-2.5, Math.min(2.5, nn.W1[j][i] - lr * grad));
+        }
+        nn.B1[j] = Math.max(-1.5, Math.min(1.5, nn.B1[j] - lr * dz1[j]));
+    }
+    nn.updates = (nn.updates || 0) + 1;
+}
+
 function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
     const closes = candles.map(c => c.c);
     const price = closes[closes.length - 1] || 1;
@@ -681,7 +740,44 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
         v5Adjustment -= 25;
     }
 
-    const finalScore = Math.round(Math.max(-100, Math.min(100, rawComposite + reputationBonus + v5Adjustment)));
+    // 6. V12 Green-Candle & Rising Momentum Confirmation (prevents buying while active 5m candle is red/falling!)
+    const lastCandle = candles.length ? candles[candles.length - 1] : { o: curPrice, c: curPrice, h: curPrice, l: curPrice };
+    const prevCandle = candles.length >= 2 ? candles[candles.length - 2] : lastCandle;
+    const prev2Candle = candles.length >= 3 ? candles[candles.length - 3] : prevCandle;
+    const isBullishCandle = (lastCandle.c >= lastCandle.o) && (lastCandle.c >= prevCandle.c * 0.9995);
+    const isRisingMacd = (macdObj.hist >= macdObj.prevHist) && (macdObj.hist >= 0);
+    if (!isBullishCandle) {
+        v5Adjustment -= 22;
+    }
+
+    // 7. V13 LAYER 1: 10->8->1 MLP Neural Network Non-Linear Evaluation
+    const higherLow = (lastCandle.l >= prevCandle.l && prevCandle.l >= prev2Candle.l) ? 0.65 : -0.35;
+    const candleRange = Math.max(0.0001, (lastCandle.h || curPrice) - (lastCandle.l || curPrice));
+    const closeNearHigh = (((lastCandle.c - (lastCandle.l || curPrice)) / candleRange) - 0.5) * 2; // -1 to +1
+    const priceActionFeat = Math.max(-1, Math.min(1, 0.5 * higherLow + 0.5 * closeNearHigh));
+    const pullbackFeat = Math.max(-1, Math.min(1, (distFromEma9Pct >= 0 && distFromEma9Pct <= 0.65) ? 0.75 : (distFromEma9Pct > 1.0 ? -0.85 : -0.30)));
+    const spyRef = marketCache["SPY"] || marketCache["QQQ"] || marketCache["BTC-USD"];
+    const mktRegimeFeat = spyRef ? Math.max(-1, Math.min(1, (spyRef.changePct || 0) / 1.5)) : 0.25;
+    const sessionFeat = (sessionInfo.session === "REGULAR" || sessionInfo.canTradeEu) ? 0.65 : 0.15;
+
+    const neuralFeatures = [
+        Math.max(-1, Math.min(1, rsiScore / 80)),
+        Math.max(-1, Math.min(1, trendScore / 80)),
+        Math.max(-1, Math.min(1, macdScore / 75)),
+        Math.max(-1, Math.min(1, volumeScore / 70)),
+        priceActionFeat,
+        pullbackFeat,
+        mktRegimeFeat,
+        sessionFeat,
+        Math.max(-1, Math.min(1, sentScore / 80)),
+        Math.max(-1, Math.min(1, reputationBonus / 25))
+    ];
+
+    const nnOut = forwardNeuralNet(neuralFeatures);
+    const winProbPct = Math.round(nnOut.prob * 1000) / 10; // e.g. 68.4%
+    const nnScoreBoost = Math.round((nnOut.prob - 0.50) * 55); // -27 to +27 non-linear MLP contribution
+
+    const finalScore = Math.round(Math.max(-100, Math.min(100, rawComposite + reputationBonus + v5Adjustment + nnScoreBoost)));
 
     return {
         rsi: Math.round(rsi * 10) / 10,
@@ -697,6 +793,10 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
         trendLabel,
         macdLabel,
         reputationBonus,
+        isBullishCandle,
+        isRisingMacd,
+        winProbPct,
+        neuralFeatures,
         tickerMem: mem,
         factors: {
             rsi: Math.round(rsiScore),
@@ -798,6 +898,7 @@ async function runHistoricalTraining(isAutoStartup = false) {
                             dynamicTpPct: evalStep.dynamicTpPct,
                             trailingActive: false,
                             entryIdx: i,
+                            neuralFeatures: evalStep.neuralFeatures,
                             entryFactors: { ...evalStep.factors }
                         };
                     }
@@ -1134,7 +1235,7 @@ function evaluateOpenPositions() {
         const rawPnlPct = valObj.rawPct;
         const levPnlPct = valObj.leveragedPct;
 
-        // 1. V11 Asymmetric 4-Stage Profit Lock (gives winners breathing room so they grow to +10..+30 EUR instead of choking at +0.90 EUR!)
+        // 1. V12 Asymmetric 5-Stage Profit Lock + Early Break-Even Shield (locks profit above entry as soon as +0.28% raw / +1.4% leveraged is reached!)
         const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
         let targetStop = pos.stopLossUsd;
         if (peakRawPct >= 2.40) {
@@ -1142,18 +1243,21 @@ function evaluateOpenPositions() {
         } else if (peakRawPct >= 1.65) {
             targetStop = pos.highPriceUsd * (1 - 0.24 / 100);
         } else if (peakRawPct >= 1.05) {
-            targetStop = pos.highPriceUsd * (1 - 0.34 / 100);
+            targetStop = pos.highPriceUsd * (1 - 0.32 / 100);
         } else if (peakRawPct >= 0.55) {
-            const breakEvenStop = pos.entryPriceUsd * (1 + 0.14 / 100);
-            const wideTrailStop = pos.highPriceUsd * (1 - 0.44 / 100);
+            const breakEvenStop = pos.entryPriceUsd * (1 + 0.18 / 100);
+            const wideTrailStop = pos.highPriceUsd * (1 - 0.38 / 100);
             targetStop = Math.max(breakEvenStop, wideTrailStop);
+        } else if (peakRawPct >= 0.28) {
+            // Early Break-Even Shield: once trade is up +1.4% leveraged, never let it fall back into a red loss!
+            targetStop = Math.max(targetStop, pos.entryPriceUsd * (1 + 0.08 / 100));
         }
 
         if (targetStop > pos.stopLossUsd) {
             pos.stopLossUsd = Math.round(targetStop * 10000) / 10000;
             if (!pos.trailingActive) {
                 pos.trailingActive = true;
-                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V11 Break-Even zámok pri zisku +${levPnlPct.toFixed(2)}% (Garantovaný plusový Stop-Loss @ ${pos.stopLossUsd.toFixed(2)} $).`, "info");
+                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V12 Break-Even zámok pri zisku +${levPnlPct.toFixed(2)}% (Garantovaný plusový Stop-Loss @ ${pos.stopLossUsd.toFixed(2)} $).`, "info");
             }
         }
 
@@ -1172,14 +1276,14 @@ function evaluateOpenPositions() {
             continue;
         }
 
-        // 4. Smart Trend Reversal Exit: ONLY exit on AI reversal if position is ALREADY IN PROFIT (>= +1.2%) to lock in gains!
-        // Never panic-sell a 2-minute pullback at a -14 EUR loss before Stop-Loss is touched!
-        if (mkt.aiScore <= -35 && levPnlPct >= 1.20) {
+        // 4. Smart Trend Reversal Exit: ONLY exit on AI reversal or news if position is ALREADY IN PROFIT (>= +0.8%) to lock in gains!
+        // Never panic-sell a 4-cent wiggle at a loss before Stop-Loss is touched!
+        if (mkt.aiScore <= -35 && levPnlPct >= 0.80) {
             executeSellPosition(pos.id, `Uzamknutie zisku pri obrate AI trendu (Skóre ${mkt.aiScore})`);
             continue;
         }
-        if ((mkt.sentimentScore || 0) <= -45 && mkt.price < (mkt.ema21 || mkt.price)) {
-            executeSellPosition(pos.id, `📰 Núdzový predaj: Negatívna správa v médiách (Sentiment ${mkt.sentimentScore})`);
+        if ((mkt.sentimentScore || 0) <= -50 && levPnlPct >= 0.50 && mkt.price < (mkt.ema21 || mkt.price)) {
+            executeSellPosition(pos.id, `📰 Uzamknutie zisku pri negatívnej správe (Sentiment ${mkt.sentimentScore})`);
             continue;
         }
 
@@ -1237,6 +1341,9 @@ function evaluateNewEntries() {
             // V11 HARD GATE 4: US Opening Bell 10-Minute Whipsaw Shield (09:30-09:40 ET)
             if (!isCrypto && !isEu && isUsFirst10Mins && (m.aiScore < 52 || m.rsi > 58)) return false;
 
+            // V12 HARD GATE 5: Green Candle & Rising MACD Confirmation (NEVER buy into a falling red 5m candle!)
+            if (!m.isBullishCandle || !m.isRisingMacd) return false;
+
             return m.aiScore >= state.learning.minScoreThreshold;
         })
         .sort((a, b) => b.aiScore - a.aiScore);
@@ -1281,28 +1388,155 @@ function evaluateNewEntries() {
     }
 }
 
+// ============================================================================
+// LAYER 2: COGNITIVE LLM BRAIN (GOOGLE GEMINI 2.5 FLASH / GROQ LLAMA-3.3-70B)
+// ============================================================================
+
+async function saveLlmApiKey() {
+    const inp = document.getElementById("llmApiKeyInput");
+    if (!inp) return;
+    const key = inp.value.trim();
+    if (!state.settings) state.settings = {};
+    state.settings.llmApiKey = key;
+    updateLlmStatusUi();
+    await saveStateToServer();
+    if (key) {
+        const provider = key.startsWith("gsk_") ? "Groq Llama-3.3-70B" : "Google Gemini 2.5 Flash";
+        addLog(`🧠 Kognitívny AI Mozog Vrstvy 2 (${provider}) bol úspešne aktivovaný! Pred každým obchodom posúdi kontext grafu, správ a minulých chýb.`, "success");
+    } else {
+        addLog("ℹ️ Kognitívny LLM kľúč bol odstránený – agent beží na Vrstve 1 (10→8→1 MLP Neurónová Sieť).", "info");
+    }
+}
+
+function updateLlmStatusUi() {
+    const lbl = document.getElementById("llmBrainStatusLabel");
+    const inp = document.getElementById("llmApiKeyInput");
+    const nnBadge = document.getElementById("nnStatusBadge");
+    const key = (state.settings?.llmApiKey || "").trim();
+    if (inp && key && !inp.value) inp.value = key;
+    if (lbl) {
+        if (key) {
+            const provider = key.startsWith("gsk_") ? "Groq Llama-3.3-70B AKTÍVNY" : "Gemini 2.5 Flash AKTÍVNY";
+            lbl.textContent = `✅ Vrstva 1 (MLP Sieť) + Vrstva 2 (${provider})`;
+            lbl.className = "badge badge-profit";
+        } else {
+            lbl.textContent = "Vrstva 1: MLP Neurónová Sieť Aktívna (Vložte kľúč pre Vrstvu 2 LLM)";
+            lbl.className = "badge badge-neutral";
+        }
+    }
+    if (nnBadge) {
+        const updates = state.learning?.neuralNet?.updates || 0;
+        nnBadge.textContent = `MLP Sieť (88 synapsií • ${updates} backprop krokov)`;
+    }
+}
+
+async function consultCognitiveLlmBrain(mkt) {
+    const apiKey = (state.settings?.llmApiKey || "").trim();
+    if (!apiKey) return { approved: true, reasonSk: "" };
+
+    const recentMistakes = (state.portfolio.closedTrades || [])
+        .filter(t => t.pnlEur < 0)
+        .slice(0, 4)
+        .map(t => `${t.symbol}: ${t.pnlPct}% (${t.exitReason})`)
+        .join("; ") || "Žiadne nedávne straty";
+
+    const prompt = `Si autonómny burzový day-trader (1000 EUR účet). Zváž nákup akcie ${mkt.symbol} pri cene ${mkt.price}$.
+Technické dáta (5m): Zmena dnes ${mkt.changePct}%, RSI=${mkt.rsi}, Trend=${mkt.trendLabel}, MACD=${mkt.macdLabel}, ATR=${mkt.atrPct}%.
+Výstup Vrstvy 1 (10->8->1 MLP Neurónová sieť): Pravdepodobnosť výhry P(win)=${mkt.winProbPct || 65}%, AI skóre=+${mkt.aiScore}.
+Najnovšia správa z trhu: "${mkt.latestHeadline || "Bez mimoriadnych správ"}" (Sentiment=${mkt.sentimentScore || 0}).
+Tvoje nedávne chyby, z ktorých sa musíš poučiť: ${recentMistakes}.
+Vráť VÝHRADNE čisté JSON v tvare: {"approved": true alebo false, "confidence": 0-100, "reasonSk": "stručné ľudské zdôvodnenie po slovensky na 1 vetu"}`;
+
+    try {
+        let rawJsonText = "";
+        if (apiKey.startsWith("gsk_")) {
+            // Groq Llama-3.3-70B API
+            const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    temperature: 0.2,
+                    response_format: { type: "json_object" },
+                    messages: [{ role: "user", content: prompt }]
+                })
+            });
+            const data = await res.json();
+            rawJsonText = data?.choices?.[0]?.message?.content || "";
+        } else {
+            // Google Gemini 2.5 Flash API
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
+                })
+            });
+            const data = await res.json();
+            rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        }
+
+        if (rawJsonText) {
+            const cleaned = rawJsonText.replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(cleaned);
+            return {
+                approved: parsed.approved !== false && Number(parsed.confidence || 70) >= 60,
+                confidence: Number(parsed.confidence || 70),
+                reasonSk: String(parsed.reasonSk || "")
+            };
+        }
+    } catch (e) {
+        console.warn("LLM Brain consultation fallback to MLP Layer 1:", e);
+    }
+    return { approved: true, reasonSk: "" };
+}
+
 async function executeBuyPosition(mkt, amountEur) {
     const priceUsd = mkt.price;
     if (!priceUsd || priceUsd <= 0) return;
 
-    const lev = Number(state.settings.leverage || 5);
+    // Layer 1 MLP Neural Net minimum win probability check (>= 58%)
+    if (mkt.winProbPct !== undefined && mkt.winProbPct < 58.0) {
+        return;
+    }
+
+    // Layer 2 Cognitive LLM Brain check (if Gemini/Groq API key is configured)
+    const llmVerdict = await consultCognitiveLlmBrain(mkt);
+    if (!llmVerdict.approved) {
+        addLog(`🧠 LLM MOZOG ZAMIETOL NÁKUP [${mkt.symbol}]: ${llmVerdict.reasonSk || "Nízka istota v kontexte trhu"}`, "warn");
+        return;
+    }
+
+    const is3xEtf = MARKET_PACKS.leveraged.includes(mkt.symbol);
+    const rawLev = Number(state.settings.leverage || 5);
+    // Cap leverage on already-3x leveraged ETFs (SOXL, NVDL, TQQQ) at 3x so total exposure isn't 15x hair-trigger noise!
+    const lev = is3xEtf ? Math.min(3, rawLev) : rawLev;
     const isEu = isEuStock(mkt.symbol);
     const fxFeeEur = isEu ? (amountEur * 0.0002) : (amountEur * 0.0015);
     const netInvestedEur = amountEur - fxFeeEur;
     const amountUsd = isEu ? netInvestedEur : (netInvestedEur * state.fxRateEurUsd);
     const shares = (amountUsd * lev) / priceUsd;
 
-    // V11 Asymmetric 3:1 Risk/Reward: Cap initial Stop-Loss at 0.85% raw (-4.25% at 5x = max ~-5.50 EUR) while Take-Profit runs to +2.5%..+3.5% (+18..+30 EUR)!
-    const baseSlPct = mkt.dynamicSlPct || state.learning.stopLossPct || 0.80;
+    // V13 Asymmetric 3:1 Risk/Reward with anti-noise breathing room on 3x ETFs
+    const baseSlPct = mkt.dynamicSlPct || state.learning.stopLossPct || 0.85;
     const baseTpPct = mkt.dynamicTpPct || state.learning.takeProfitPct || 2.80;
-    const slPct = lev >= 10 ? Math.min(0.65, baseSlPct) : (lev >= 5 ? Math.max(0.55, Math.min(0.85, baseSlPct)) : baseSlPct);
+    const slPct = is3xEtf
+        ? Math.max(0.95, Math.min(1.15, baseSlPct))
+        : (lev >= 10 ? Math.min(0.65, baseSlPct) : (lev >= 5 ? Math.max(0.65, Math.min(0.90, baseSlPct)) : baseSlPct));
     const tpPct = Math.max(slPct * 3.0, baseTpPct);
 
     const slUsd = Math.round(priceUsd * (1 - slPct / 100) * 10000) / 10000;
     const tpUsd = Math.round(priceUsd * (1 + tpPct / 100) * 10000) / 10000;
 
-    const reasonParts = [isEu ? `🇩🇪 EUR 0% FX` : `⚡ ${lev}x Páka`, `AI +${mkt.aiScore}`];
-    if (mkt.sentimentScore && mkt.sentimentScore > 0) {
+    const reasonParts = [isEu ? `🇩🇪 EUR 0% FX` : `⚡ ${lev}x Páka`, `🧠 P(win) ${mkt.winProbPct || 65}%`, `AI +${mkt.aiScore}`];
+    if (llmVerdict.reasonSk) {
+        reasonParts.push(`🤖 LLM: ${llmVerdict.reasonSk}`);
+    } else if (mkt.sentimentScore && mkt.sentimentScore > 0) {
         reasonParts.push(`📰 Správy +${mkt.sentimentScore}`);
     }
     if (mkt.reputationBonus) {
@@ -1329,6 +1563,7 @@ async function executeBuyPosition(mkt, amountEur) {
         openedTs: Date.now(),
         entryRsi: mkt.rsi || 50,
         entryAtrPct: mkt.atrPct || 0.5,
+        neuralFeatures: mkt.neuralFeatures || null,
         reason: reasonParts.join(" | "),
         entryFactors: { ...mkt.factors }
     };
@@ -1451,6 +1686,21 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
     if (pos.id && Array.isArray(state.learning.learnedTradeIds) && !state.learning.learnedTradeIds.includes(pos.id)) {
         state.learning.learnedTradeIds.push(pos.id);
     }
+
+    // V13 LAYER 1: Real Backpropagation update across 88 MLP Neural Network synapses!
+    const nnFeats = pos.neuralFeatures || [
+        (factors.rsi || 0) / 80,
+        (factors.trend || 0) / 80,
+        (factors.macd || 0) / 75,
+        (factors.volume || 0) / 70,
+        pnlPct > 0 ? 0.4 : -0.4,
+        0.2,
+        0.2,
+        0.5,
+        (factors.sentiment || 0) / 80,
+        0.0
+    ];
+    trainNeuralNetBackprop(nnFeats, pnlPct > 0, isBacktest ? 0.025 : 0.06);
 
     const reward = Math.max(-1.2, Math.min(1.2, pnlPct / 1.5));
     const learningRate = isBacktest ? 0.02 : 0.06;
@@ -1636,6 +1886,8 @@ function renderAll() {
     renderKpis();
     renderScannerTable();
     renderPositionsTable();
+    renderMorningNarrative();
+    updateLlmStatusUi();
     renderLearningPanel();
     renderHistoryTable();
     renderSelectedChart();
@@ -1745,15 +1997,17 @@ function renderScannerTable() {
         const barWidth = Math.min(100, Math.max(5, (m.aiScore + 100) / 2));
         const alreadyHeld = state.portfolio.positions.some(p => p.symbol === sym);
 
-        // Per-Stock Memory Cell
-        let memHtml = `<span class="text-muted" style="font-size:11px;">Nový titul</span>`;
+        // Per-Stock Memory Cell + MLP Win Probability
+        const pWin = m.winProbPct !== undefined ? m.winProbPct : 50;
+        let memHtml = `<span class="text-muted" style="font-size:11px;">🧠 P(win): ${pWin.toFixed(0)}%</span>`;
         if (m.tickerMem && m.tickerMem.trades > 0) {
             const tm = m.tickerMem;
+            const wr = tm.winRate !== undefined ? tm.winRate : (tm.wins ? Math.round((tm.wins / tm.trades) * 100) : 0);
             const repColor = tm.reputationBonus > 0 ? "text-green" : (tm.reputationBonus < 0 ? "text-red" : "text-muted");
             const icon = tm.reputationBonus >= 4 ? "⭐" : (tm.reputationBonus <= -4 ? "⚠️" : "📊");
             memHtml = `
-                <span class="${repColor}" title="Počet natrénovaných obchodov: ${tm.trades} | Priemerný výsledok: ${tm.avgPnlPct}% | Najlepší indikátor: ${tm.bestFactor.toUpperCase()}">
-                    ${icon} ${tm.winRate}% W <small>(${tm.reputationBonus >= 0 ? "+" : ""}${tm.reputationBonus}b)</small>
+                <span class="${repColor}" title="MLP P(win): ${pWin}% | Počet natrénovaných obchodov: ${tm.trades} | Priemerný výsledok: ${tm.avgPnlPct}% | Najlepší indikátor: ${(tm.bestFactor || 'trend').toUpperCase()}">
+                    ${icon} ${wr}% W <small>(P:${pWin.toFixed(0)}%)</small>
                 </span>
             `;
         }
@@ -1906,9 +2160,10 @@ function renderLearningPanel() {
             memContainer.innerHTML = `<span class="text-muted" style="font-size:12px;">Kliknite na "🏋️ Trénovať AI na histórii", aby si agent vytvoril pamäť pre jednotlivé akcie.</span>`;
         } else {
             memContainer.innerHTML = memList.map(([sym, m]) => {
+                const wr = m.winRate !== undefined ? m.winRate : (m.wins ? Math.round((m.wins / m.trades) * 100) : 0);
                 const cls = m.reputationBonus >= 3 ? "badge-profit" : (m.reputationBonus <= -3 ? "badge-loss" : "badge-neutral");
-                return `<span class="badge ${cls}" style="cursor:pointer;" onclick="selectSymbol('${sym}')" title="${sym}: ${m.trades} obchodov, Win Rate ${m.winRate}%, Priemer ${m.avgPnlPct}%, Najlepší faktor: ${m.bestFactor.toUpperCase()}">
-                    ${sym}: ${m.winRate}% W (${m.reputationBonus >= 0 ? "+" : ""}${m.reputationBonus}b)
+                return `<span class="badge ${cls}" style="cursor:pointer;" onclick="selectSymbol('${sym}')" title="${sym}: ${m.trades} obchodov, Win Rate ${wr}%, Priemer ${m.avgPnlPct}%, Najlepší faktor: ${(m.bestFactor || 'trend').toUpperCase()}">
+                    ${sym}: ${wr}% W (${m.reputationBonus >= 0 ? "+" : ""}${m.reputationBonus}b)
                 </span>`;
             }).join("");
         }
@@ -2374,8 +2629,55 @@ async function forwardOrderToBroker(symbol, side, notionalUsd) {
 }
 
 // ============================================================================
-// DAILY SUMMARY, SELF-REFLECTION & 09:00 EMAIL REPORT ENGINE
+// DAILY SUMMARY, SELF-REFLECTION & 08:00 HUMAN-LANGUAGE REPORT ENGINE (~100 WORDS)
 // ============================================================================
+
+function buildMorningHumanNarrative100Words() {
+    const closed = state.portfolio.closedTrades || [];
+    const positions = state.portfolio.positions || [];
+    const totalEquity = getTotalPortfolioEquityEur();
+    const initCap = state.portfolio.initialCapitalEur || 1000;
+    const netPnlEur = totalEquity - initCap;
+    const wins = closed.filter(t => t.pnlEur > 0);
+    const losses = closed.filter(t => t.pnlEur <= 0);
+    const recent = closed.slice(0, 3);
+
+    let tradePart = "";
+    if (recent.length > 0) {
+        const items = recent.map(t => {
+            const verb = t.pnlEur >= 0 ? `zarobil +${t.pnlEur.toFixed(2)} €` : `uzavrel so stratou ${t.pnlEur.toFixed(2)} €`;
+            return `o ${t.openedAt} som vstúpil do ${t.symbol} a o ${t.closedAt} ho ${verb} (${t.exitReason})`;
+        });
+        tradePart = `Počas poslednej smeny a noci som zrealizoval tieto kroky: ${items.join("; ")}. Celkovo mám za sebou ${closed.length} uzavretých obchodov (${wins.length} ziskových a ${losses.length} stratových).`;
+    } else {
+        tradePart = `Počas noci som nepretržite každých 15 sekúnd skenoval krypto trhy a správy, pričom som disciplinovane filtroval falošné výkyvy a čakal len na potvrdené zelené sviečky s rastúcim MACD a RSI pod 62,5.`;
+    }
+
+    let openPart = "";
+    if (positions.length > 0) {
+        const pList = positions.map(p => `${p.symbol} (nakúpené o ${p.openedAt} za ${p.investedEur.toFixed(0)} € pri cene ${p.entryPriceUsd.toFixed(2)} $, chránené Stop-Lossom na ${p.stopLossUsd.toFixed(2)} $)`).join(" a ");
+        openPart = `Aktuálne držím ${positions.length} otvorenú pozíciu: ${pList}.`;
+    } else {
+        openPart = `Momentálne držím 100 % hotovosti v bezpečí a striehnem na prvé ranné impulzy s pomerom zisku k riziku 3:1.`;
+    }
+
+    const statusWord = netPnlEur >= 0 ? `v čistom pluse +${netPnlEur.toFixed(2)} €` : `s priebežnou bilanciou ${netPnlEur.toFixed(2)} €`;
+    const text = `Dobré ráno! Hlásim sa o 08:00 s ľudským prehľadom mojej nočnej práce. Hodnota nášho účtu je momentálne ${totalEquity.toFixed(2)} € (${statusWord}, voľná hotovosť ${state.portfolio.cashEur.toFixed(2)} €). ${tradePart} ${openPart} Z predchádzajúcich chýb som sa v Generácii #${state.learning.generation} poučil tak, že už nikdy nepredávam v panike na prvej červenej sviečke a okamžite pri zisku +1,4 % uzamykám pozíciu na Break-Even. Dnes od 09:00 sa sústredím na európske akcie v EUR bez poplatkov a od 15:30 na americké technologické rakety.`;
+
+    return text;
+}
+
+function renderMorningNarrative() {
+    const box = document.getElementById("morningHumanNarrativeBox");
+    const badge = document.getElementById("morningStoryWordCount");
+    if (!box) return;
+    const narrative = buildMorningHumanNarrative100Words();
+    const wordCount = narrative.trim().split(/\s+/).length;
+    box.textContent = narrative;
+    if (badge) {
+        badge.textContent = `Auto 08:00 • ${wordCount} slov`;
+    }
+}
 
 function openDailyReportModal() {
     const modal = document.getElementById("dailyReportModal");
@@ -2398,8 +2700,8 @@ async function saveEmailTokenFromModal() {
     state.settings.emailAccessToken = val;
     await saveStateToServer();
     if (val) {
-        addLog("📧 E-mailový token (PostMail / Web3Forms) uložený pre automatické 09:00 reporty na mt.banovic@gmail.com.", "success");
-        alert("✅ E-mailový token uložený! Teraz môžete kliknúť na '📧 Poslať teraz na mt.banovic@gmail.com' a taktiež sa bude posielať automaticky každé ráno o 09:00.");
+        addLog("📧 E-mailový token (PostMail / Web3Forms) uložený pre automatické 08:00 reporty na mt.banovic@gmail.com.", "success");
+        alert("✅ E-mailový token uložený! Teraz môžete kliknúť na '📧 Poslať teraz na mt.banovic@gmail.com' a taktiež sa bude posielať automaticky každé ráno o 08:00.");
     } else {
         alert("Token bol vymazaný.");
     }
@@ -2413,13 +2715,15 @@ async function checkAutoDailyEmail0900() {
         const dd = String(skNow.getDate()).padStart(2, "0");
         const todayStr = `${yyyy}-${mm}-${dd}`;
         const tok = state.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
-        if (skNow.getHours() >= 9 && state.lastEmailReportDate !== todayStr && tok) {
+        if (skNow.getHours() >= 8 && state.lastEmailReportDate !== todayStr && tok) {
             state.lastEmailReportDate = todayStr;
+            const story = buildMorningHumanNarrative100Words();
+            addLog(`🌅 RANNÉ HLÁSENIE O 08:00 (Ľudskou rečou): ${story}`, "info");
             await saveStateToServer();
             await sendDailyReportEmailNow(true);
         }
     } catch (e) {
-        console.warn("09:00 auto-email check warning:", e);
+        console.warn("08:00 auto-email check warning:", e);
     }
 }
 
@@ -2434,6 +2738,8 @@ function buildDailyReportHtml() {
     const totalEquity = getTotalPortfolioEquityEur();
     const netPnlEur = totalEquity - state.portfolio.initialCapitalEur;
     const netPnlPct = (netPnlEur / state.portfolio.initialCapitalEur) * 100;
+    const morningStory = buildMorningHumanNarrative100Words();
+    const storyWords = morningStory.trim().split(/\s+/).length;
 
     const wins = closed.filter(t => t.pnlEur > 0);
     const losses = closed.filter(t => t.pnlEur <= 0);
@@ -2451,6 +2757,16 @@ function buildDailyReportHtml() {
     const penStocks = Object.entries(memObj).filter(([_, m]) => m.reputationBonus < 0).sort((a, b) => a[1].reputationBonus - b[1].reputationBonus).slice(0, 6);
 
     return `
+        <div class="weight-item" style="border-left: 4px solid var(--accent-cyan); background: rgba(6, 182, 212, 0.08);">
+            <div style="font-weight:700; margin-bottom:6px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
+                <span>🌅 Ranné hlásenie o 08:00 ľudskou rečou (Čo a kedy som urobil v noci):</span>
+                <span class="badge badge-profit">${storyWords} slov</span>
+            </div>
+            <div style="font-size:13.5px; line-height:1.65; color:var(--text-primary);">
+                ${morningStory}
+            </div>
+        </div>
+
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:10px;">
             <div class="weight-item">
                 <div class="text-muted" style="font-size:11px;">AKTUÁLNY STAV ÚČTU</div>
@@ -2567,14 +2883,18 @@ async function sendDailyReportEmailNow(isSilentAuto = false) {
         const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 4);
         const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
 
-        const subject = `📊 Denný AI Burzový Report | Hodnota: ${totalEquity.toFixed(2)} € (${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`;
+        const morningStory = buildMorningHumanNarrative100Words();
+        const subject = `🌅 Ranné hlásenie AI (08:00) | Hodnota: ${totalEquity.toFixed(2)} € (${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`;
         const bodyText = [
-            `📊 DENNÝ SÚHRN & SEBAREFLEXIA AI BURZOVÉHO AGENTA`,
-            `Dátum a čas: ${new Date().toLocaleString("sk-SK")}`,
+            `🌅 RANNÉ HLÁSENIE AI AGENTA O 08:00 (ĽUDSKOU REČOU – ~100 SLOV):`,
+            `${morningStory}`,
+            ``,
             `------------------------------------------------------------`,
-            `💰 CELKOVÁ HODNOTA PORTFÓLIA: ${totalEquity.toFixed(2)} € (Štart: 100.00 € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
+            `📊 DETAILNÝ SÚHRN & SEBAREFLEXIA AI BURZOVÉHO AGENTA`,
+            `Dátum a čas: ${new Date().toLocaleString("sk-SK")}`,
+            `💰 CELKOVÁ HODNOTA PORTFÓLIA: ${totalEquity.toFixed(2)} € (Štart: ${(state.portfolio.initialCapitalEur || 1000).toFixed(2)} € | Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)`,
             `💵 Hotovosť: ${state.portfolio.cashEur.toFixed(2)} €`,
-            `📂 Otvorené pozície (${positions.length}): ${positions.map(p => `${p.symbol} (${p.leverage || 5}x @ ${p.entryPriceUsd})`).join(", ") || "Žiadne"}`,
+            `📂 Otvorené pozície (${positions.length}): ${positions.map(p => `${p.symbol} (${p.leverage || 5}x @ ${p.entryPriceUsd} $, nakúpené o ${p.openedAt})`).join(", ") || "Žiadne"}`,
             `📈 Bilancia obchodov: Spolu ${closed.length} | Výhry: ${wins.length} | Straty: ${losses.length} | Generácia AI: #${state.learning.generation}`,
             ``,
             `🏆 TOP VÝHERNÉ OBCHODY:`,
