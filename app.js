@@ -89,6 +89,7 @@ const DEFAULT_STATE = {
         maxPosEur: 33.00,
         maxPositions: 3,
         watchlist: "SOXL,TQQQ,NVDL,TSLL,NVDA,TSLA,AMD,SMCI,COIN,MSTR,PLTR",
+        emailAccessToken: "vvtbwu0zpwfeeuda61is0iu1",
         brokerKey: "",
         brokerSecret: ""
     }
@@ -2028,7 +2029,7 @@ function openDailyReportModal() {
     const box = document.getElementById("dailyReportContent");
     const tokInput = document.getElementById("emailAccessTokenInput");
     if (tokInput) {
-        tokInput.value = state.settings?.emailAccessToken || "";
+        tokInput.value = state.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
     }
     if (box) {
         box.innerHTML = buildDailyReportHtml();
@@ -2058,7 +2059,8 @@ async function checkAutoDailyEmail0900() {
         const mm = String(skNow.getMonth() + 1).padStart(2, "0");
         const dd = String(skNow.getDate()).padStart(2, "0");
         const todayStr = `${yyyy}-${mm}-${dd}`;
-        if (skNow.getHours() >= 9 && state.lastEmailReportDate !== todayStr && state.settings?.emailAccessToken) {
+        const tok = state.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
+        if (skNow.getHours() >= 9 && state.lastEmailReportDate !== todayStr && tok) {
             state.lastEmailReportDate = todayStr;
             await saveStateToServer();
             await sendDailyReportEmailNow(true);
@@ -2201,7 +2203,7 @@ async function sendDailyReportEmailNow(isSilentAuto = false) {
             state.settings.emailAccessToken = tokInput.value.trim();
             await saveStateToServer();
         }
-        const token = (state.settings?.emailAccessToken || "").trim();
+        const token = (state.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1").trim();
 
         const closed = state.portfolio.closedTrades || [];
         const positions = state.portfolio.positions || [];
