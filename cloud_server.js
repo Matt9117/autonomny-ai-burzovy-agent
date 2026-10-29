@@ -535,7 +535,7 @@ function sendDailyEmailReport(recipientEmail = "mt.banovic@gmail.com") {
             const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
 
             const subject = `📊 Denný AI Burzový Report (09:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`;
-            const token = String(serverState.settings?.emailAccessToken || "").trim();
+            const token = String(serverState.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1").trim();
 
             if (token && !token.includes("-")) {
                 const postData = `access_token=${encodeURIComponent(token)}&subject=${encodeURIComponent(subject)}&text=${encodeURIComponent(
