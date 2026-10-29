@@ -534,8 +534,36 @@ function sendDailyEmailReport(recipientEmail = "mt.banovic@gmail.com") {
             const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 3);
             const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
 
+            const subject = `📊 Denný AI Burzový Report (09:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`;
+            const token = String(serverState.settings?.emailAccessToken || "").trim();
+
+            if (token && !token.includes("-")) {
+                const postData = `access_token=${encodeURIComponent(token)}&subject=${encodeURIComponent(subject)}&text=${encodeURIComponent(
+                    `Hodnota portfólia: ${totalEquity.toFixed(2)} € (Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)\n` +
+                    `Hotovosť: ${(serverState.portfolio?.cashEur || 0).toFixed(2)} € | Otvorené: ${positions.map(p => `${p.symbol} (${p.leverage || defaultLev}x)`).join(", ") || "Žiadne"}\n` +
+                    `Bilancia: Spolu ${closed.length} | Výhry: ${wins.length} | Straty: ${losses.length}\n` +
+                    `TOP Výhry: ${sortedBest.map(t => `${t.symbol}: +${t.pnlEur.toFixed(2)} €`).join(" | ") || "Žiadne"}\n` +
+                    `Najväčšie Straty: ${sortedWorst.map(t => `${t.symbol}: ${t.pnlEur.toFixed(2)} €`).join(" | ") || "Žiadne"}`
+                )}`;
+                const pReq = https.request({
+                    hostname: "postmail.invotes.com",
+                    path: "/send",
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Content-Length": Buffer.byteLength(postData)
+                    }
+                }, (res) => {
+                    resolve({ ok: true, status: res.statusCode, gateway: "postmail" });
+                });
+                pReq.on("error", (err) => resolve({ ok: false, error: err.message }));
+                pReq.write(postData);
+                pReq.end();
+                return;
+            }
+
             const payload = JSON.stringify({
-                _subject: `📊 Denný AI Burzový Report (09:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`,
+                _subject: subject,
                 _template: "table",
                 _captcha: "false",
                 "Dátum a Čas (Bratislava)": new Date().toLocaleString("sk-SK", { timeZone: "Europe/Bratislava" }),
@@ -801,9 +829,9 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (pathname === "/api/self-update") {
-            // Pulls latest index.html, app.js, styles.css directly from GitHub main branch!
+            // Pulls latest index.html, app.js, styles.css, cloud_server.js directly from GitHub main branch!
             const rawBase = "https://raw.githubusercontent.com/Matt9117/autonomny-ai-burzovy-agent/main";
-            for (const f of ["index.html", "app.js", "styles.css"]) {
+            for (const f of ["index.html", "app.js", "styles.css", "cloud_server.js"]) {
                 const parsed = url.parse(`${rawBase}/${f}?t=${Date.now()}`);
                 await new Promise((resolve) => {
                     https.get({ hostname: parsed.hostname, path: parsed.path, headers: { "User-Agent": "AI-Agent" } }, (r) => {
