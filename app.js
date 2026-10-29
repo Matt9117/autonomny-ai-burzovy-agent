@@ -104,28 +104,62 @@ let newsTimer = null;
 let isScanning = false;
 let isTrainingHistory = false;
 
-// NLP Financial Sentiment Lexicon
+// NLP Financial Sentiment Lexicon (English + Financial Catalysts)
 const BULLISH_WORDS = [
-    { w: "beat", s: 25 }, { w: "beats", s: 25 }, { w: "surge", s: 30 }, { w: "surges", s: 30 },
-    { w: "soar", s: 30 }, { w: "soars", s: 30 }, { w: "jump", s: 22 }, { w: "jumps", s: 22 },
-    { w: "rally", s: 25 }, { w: "rallies", s: 25 }, { w: "upgrade", s: 32 }, { w: "upgraded", s: 32 },
-    { w: "buy", s: 18 }, { w: "outperform", s: 28 }, { w: "strong", s: 18 }, { w: "record", s: 24 },
-    { w: "bull", s: 20 }, { w: "bullish", s: 25 }, { w: "growth", s: 16 }, { w: "profit", s: 18 },
-    { w: "partnership", s: 24 }, { w: "investment", s: 20 }, { w: "deal", s: 20 }, { w: "breakout", s: 28 },
-    { w: "raises", s: 25 }, { w: "raised", s: 25 }, { w: "higher", s: 15 }, { w: "gain", s: 16 },
-    { w: "gains", s: 16 }, { w: "boom", s: 24 }, { w: "top", s: 12 }, { w: "win", s: 18 }, { w: "wins", s: 18 }
+    { w: "beat", s: 28 }, { w: "beats", s: 28 }, { w: "surge", s: 32 }, { w: "surges", s: 32 },
+    { w: "soar", s: 32 }, { w: "soars", s: 32 }, { w: "jump", s: 24 }, { w: "jumps", s: 24 },
+    { w: "rally", s: 26 }, { w: "rallies", s: 26 }, { w: "upgrade", s: 34 }, { w: "upgraded", s: 34 },
+    { w: "buy", s: 20 }, { w: "outperform", s: 28 }, { w: "strong", s: 20 }, { w: "record", s: 26 },
+    { w: "bull", s: 22 }, { w: "bullish", s: 28 }, { w: "growth", s: 18 }, { w: "profit", s: 22 },
+    { w: "partnership", s: 24 }, { w: "investment", s: 20 }, { w: "deal", s: 22 }, { w: "breakout", s: 30 },
+    { w: "raises", s: 26 }, { w: "raised", s: 26 }, { w: "higher", s: 18 }, { w: "gain", s: 18 },
+    { w: "gains", s: 18 }, { w: "boom", s: 26 }, { w: "top", s: 14 }, { w: "win", s: 20 }, { w: "wins", s: 20 },
+    { w: "demand", s: 20 }, { w: "contract", s: 24 }, { w: "order", s: 20 }, { w: "orders", s: 22 },
+    { w: "launch", s: 18 }, { w: "launches", s: 18 }, { w: "expansion", s: 20 }, { w: "exceeds", s: 28 },
+    { w: "smarter", s: 14 }, { w: "transforms", s: 16 }, { w: "innovation", s: 16 }, { w: "leader", s: 16 },
+    { w: "momentum", s: 22 }, { w: "rebound", s: 20 }, { w: "recovery", s: 18 }, { w: "positive", s: 18 },
+    { w: "buyback", s: 24 }, { w: "dividend", s: 16 }, { w: "approval", s: 26 }, { w: "Climb", s: 18 },
+    { w: "climbs", s: 18 }, { w: "advance", s: 18 }, { w: "advances", s: 18 }, { w: "optimism", s: 20 }
 ];
 
 const BEARISH_WORDS = [
-    { w: "miss", s: -28 }, { w: "misses", s: -28 }, { w: "plunge", s: -32 }, { w: "plunges", s: -32 },
-    { w: "drop", s: -22 }, { w: "drops", s: -22 }, { w: "fall", s: -20 }, { w: "falls", s: -20 },
-    { w: "crash", s: -35 }, { w: "downgrade", s: -32 }, { w: "downgraded", s: -32 }, { w: "sell", s: -20 },
-    { w: "underperform", s: -28 }, { w: "weak", s: -20 }, { w: "loss", s: -22 }, { w: "losses", s: -22 },
-    { w: "bear", s: -20 }, { w: "bearish", s: -25 }, { w: "lawsuit", s: -30 }, { w: "probe", s: -28 },
+    { w: "miss", s: -28 }, { w: "misses", s: -28 }, { w: "plunge", s: -34 }, { w: "plunges", s: -34 },
+    { w: "drop", s: -24 }, { w: "drops", s: -24 }, { w: "fall", s: -22 }, { w: "falls", s: -22 },
+    { w: "crash", s: -36 }, { w: "downgrade", s: -34 }, { w: "downgraded", s: -34 }, { w: "sell", s: -22 },
+    { w: "underperform", s: -28 }, { w: "weak", s: -22 }, { w: "loss", s: -24 }, { w: "losses", s: -24 },
+    { w: "bear", s: -22 }, { w: "bearish", s: -28 }, { w: "lawsuit", s: -30 }, { w: "probe", s: -28 },
     { w: "investigation", s: -28 }, { w: "cut", s: -20 }, { w: "cuts", s: -20 }, { w: "slump", s: -26 },
-    { w: "warning", s: -26 }, { w: "warns", s: -26 }, { w: "decline", s: -20 }, { w: "declines", s: -20 },
-    { w: "layoff", s: -18 }, { w: "layoffs", s: -18 }, { w: "risk", s: -14 }, { w: "down", s: -14 },
-    { w: "bubble", s: -22 }, { w: "tariff", s: -20 }, { w: "tariffs", s: -20 }
+    { w: "warning", s: -28 }, { w: "warns", s: -28 }, { w: "decline", s: -22 }, { w: "declines", s: -22 },
+    { w: "layoff", s: -18 }, { w: "layoffs", s: -18 }, { w: "risk", s: -16 }, { w: "down", s: -16 },
+    { w: "bubble", s: -22 }, { w: "tariff", s: -22 }, { w: "tariffs", s: -22 }, { w: "tumble", s: -28 },
+    { w: "tumbles", s: -28 }, { w: "slide", s: -22 }, { w: "slides", s: -22 }, { w: "sink", s: -24 },
+    { w: "sinks", s: -24 }, { w: "delay", s: -20 }, { w: "recall", s: -24 }, { w: "fine", s: -20 },
+    { w: "slowdown", s: -24 }, { w: "fears", s: -20 }, { w: "concern", s: -16 }, { w: "selloff", s: -30 }
+];
+
+const NEWS_ENTITY_MAP = [
+    { kw: ["nvidia", "nvda", "blackwell", "gpu", "geforce"], syms: ["NVDA", "NVDL", "SOXL", "SMCI"] },
+    { kw: ["semiconductor", "chip", "chips", "wafer", "foundry", "ai "], syms: ["SOXL", "NVDA", "NVDL", "AMD", "AVGO", "TSM", "ASML.AS", "IFX.DE", "ARM"] },
+    { kw: ["asml", "lithography"], syms: ["ASML.AS", "ASML", "SOXL"] },
+    { kw: ["infineon"], syms: ["IFX.DE", "SOXL"] },
+    { kw: ["rheinmetall", "defense", "defence", "military", "nato", "ammunition"], syms: ["RHM.DE"] },
+    { kw: ["siemens", "energy", "grid", "turbine", "wind"], syms: ["ENR.DE", "SIE.DE"] },
+    { kw: ["sap ", "erp", "enterprise software"], syms: ["SAP.DE"] },
+    { kw: ["deutsche bank", "commerzbank", "ecb", "eurozone", "dax", "frankfurt"], syms: ["DBK.DE", "CBK.DE", "ALV.DE", "SIE.DE", "SAP.DE"] },
+    { kw: ["airbus", "aviation", "aircraft"], syms: ["AIR.PA"] },
+    { kw: ["mercedes", "bmw", "auto", "car"], syms: ["MBG.DE", "BMW.DE", "TSLA"] },
+    { kw: ["tesla", "tsla", "musk", "cybertruck", "robotaxi", "ev "], syms: ["TSLA", "TSLL"] },
+    { kw: ["apple", "aapl", "iphone", "mac"], syms: ["AAPL", "TQQQ"] },
+    { kw: ["microsoft", "msft", "azure", "openai", "copilot"], syms: ["MSFT", "TQQQ", "FNGU"] },
+    { kw: ["amazon", "amzn", "aws"], syms: ["AMZN", "TQQQ", "FNGU"] },
+    { kw: ["meta", "facebook", "instagram", "llama"], syms: ["META", "FNGU", "TQQQ"] },
+    { kw: ["google", "alphabet", "googl", "gemini", "waymo"], syms: ["GOOGL", "FNGU", "TQQQ"] },
+    { kw: ["amd", "ryzen", "epyc", "instinct"], syms: ["AMD", "SOXL"] },
+    { kw: ["palantir", "pltr"], syms: ["PLTR"] },
+    { kw: ["bitcoin", "btc", "crypto", "etf", "blockchain"], syms: ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "AVAX-USD"] },
+    { kw: ["ethereum", "eth"], syms: ["ETH-USD", "BTC-USD"] },
+    { kw: ["solana", "sol"], syms: ["SOL-USD", "BTC-USD"] },
+    { kw: ["nasdaq", "tech stocks", "wall street", "s&p 500", "fed ", "rate cut"], syms: ["TQQQ", "SOXL", "UPRO", "FNGU", "SPY", "QQQ"] }
 ];
 
 // ============================================================================
@@ -301,6 +335,9 @@ async function loadStateFromServer() {
                     state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend" };
                 }
                 await saveStateToServer();
+            }
+            if (state.learning.minScoreThreshold > 36) {
+                state.learning.minScoreThreshold = 34;
             }
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
@@ -675,6 +712,12 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
     if (sessionInfo.session === "REGULAR" && MARKET_PACKS.leveraged.includes(symbol) && curPrice > ema9 && macdObj.hist > 0) {
         v5Adjustment += 9;
     }
+    // 5. Breaking News Catalyst Boost / Penalty (direct news-driven trading action)
+    if (sentScore >= 25 && curPrice >= ema9) {
+        v5Adjustment += 12;
+    } else if (sentScore <= -30) {
+        v5Adjustment -= 25;
+    }
 
     const finalScore = Math.round(Math.max(-100, Math.min(100, rawComposite + reputationBonus + v5Adjustment)));
 
@@ -889,45 +932,119 @@ function scoreHeadlineSentiment(title) {
     return Math.max(-100, Math.min(100, score));
 }
 
-async function fetchAllNews() {
+async function fetchAllNews(isManualClick = false) {
+    const btn = document.getElementById("btnRefreshNews");
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Analyzujem správy...";
+    }
     const watchlist = getActiveWatchlist();
-    const query = watchlist.slice(0, 6).join(" OR ");
-    try {
-        const res = await fetch(`/api/news?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        if (data && data.ok && Array.isArray(data.news)) {
-            newsCache = data.news.map(n => {
-                const rawScore = scoreHeadlineSentiment(n.title);
-                return {
-                    ...n,
-                    sentimentScore: rawScore
-                };
-            });
+    // Parallel single-term queries (Yahoo Finance search returns 0 results if 'OR' boolean syntax is used!)
+    const queries = ["NVDA", "TSLA", "ASML", "Siemens", "Bitcoin", "stock market"];
+    if (state.selectedSymbol && !queries.includes(state.selectedSymbol)) {
+        queries.unshift(state.selectedSymbol);
+    }
+    for (const pos of (state.portfolio?.positions || [])) {
+        if (pos.symbol && !queries.includes(pos.symbol)) queries.unshift(pos.symbol);
+    }
 
+    try {
+        const settled = await Promise.allSettled(
+            queries.slice(0, 7).map(q => fetch(`/api/news?q=${encodeURIComponent(q)}`).then(r => r.json()))
+        );
+
+        const rawArticles = [];
+        const seenKeys = new Set();
+        for (const r of settled) {
+            if (r.status === "fulfilled" && r.value && Array.isArray(r.value.news)) {
+                for (const item of r.value.news) {
+                    const key = item.uuid || item.title;
+                    if (!key || seenKeys.has(key)) continue;
+                    seenKeys.add(key);
+                    rawArticles.push(item);
+                }
+            }
+        }
+
+        rawArticles.sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
+
+        if (rawArticles.length > 0) {
             const map = {};
             for (const sym of watchlist) {
                 map[sym] = { score: 0, count: 0, latestHeadline: "" };
             }
 
-            for (const item of newsCache) {
-                const titleUpper = (item.title || "").toUpperCase();
-                for (const sym of watchlist) {
-                    const cleanSym = sym.replace("-USD", "");
-                    const isRelated = (item.relatedTickers && item.relatedTickers.includes(sym)) || titleUpper.includes(cleanSym);
-                    if (isRelated) {
-                        map[sym].count++;
-                        map[sym].score = Math.max(-100, Math.min(100, map[sym].score + item.sentimentScore));
-                        if (!map[sym].latestHeadline) {
-                            map[sym].latestHeadline = item.title;
-                        }
+            newsCache = rawArticles.slice(0, 35).map(n => {
+                const rawScore = scoreHeadlineSentiment(n.title);
+                const lowerTitle = ` ${(n.title || "").toLowerCase()} `;
+                const matchedSyms = new Set(Array.isArray(n.relatedTickers) ? n.relatedTickers : []);
+
+                for (const rule of NEWS_ENTITY_MAP) {
+                    if (rule.kw.some(k => lowerTitle.includes(k))) {
+                        rule.syms.forEach(s => matchedSyms.add(s));
                     }
                 }
-            }
+                for (const sym of watchlist) {
+                    const cleanSym = sym.replace("-USD", "").replace(/\.(DE|AS|PA)$/i, "");
+                    if (cleanSym.length >= 3 && (n.title || "").toUpperCase().includes(cleanSym)) {
+                        matchedSyms.add(sym);
+                    }
+                }
+
+                const finalTickers = Array.from(matchedSyms);
+                for (const sym of finalTickers) {
+                    if (!map[sym]) map[sym] = { score: 0, count: 0, latestHeadline: "" };
+                    map[sym].count++;
+                    // Weighted blend toward strongest breaking news
+                    const nextScore = map[sym].count === 1 ? rawScore : Math.round(map[sym].score * 0.65 + rawScore * 0.65);
+                    map[sym].score = Math.max(-100, Math.min(100, nextScore));
+                    if (!map[sym].latestHeadline || Math.abs(rawScore) >= 25) {
+                        map[sym].latestHeadline = n.title;
+                    }
+                }
+
+                return {
+                    ...n,
+                    relatedTickers: finalTickers,
+                    sentimentScore: rawScore
+                };
+            });
+
             tickerSentiment = map;
             renderNewsFeed();
+
+            // Immediately re-evaluate all marketCache symbols with the new NLP sentiment and execute trades if triggered!
+            let topBullSym = null;
+            let topBullScore = 0;
+            for (const sym of Object.keys(marketCache)) {
+                marketCache[sym] = analyzeSymbolData(marketCache[sym]);
+                const sVal = tickerSentiment[sym]?.score || 0;
+                if (sVal > topBullScore) {
+                    topBullScore = sVal;
+                    topBullSym = sym;
+                }
+            }
+
+            const posCount = newsCache.filter(n => n.sentimentScore > 0).length;
+            const negCount = newsCache.filter(n => n.sentimentScore < 0).length;
+            if (isManualClick || Math.random() < 0.35) {
+                addLog(`📰 NLP Analýza správ: Spracovaných ${newsCache.length} živých správ (🟢 ${posCount} býčích / 🔴 ${negCount} medvedích). ${topBullSym ? `Najvyšší mediálny impulz: ${topBullSym} (+${topBullScore}b).` : ""}`, "info");
+            }
+
+            if (state.agentActive && Object.keys(marketCache).length > 0) {
+                evaluateOpenPositions();
+                evaluateNewEntries();
+            }
+            renderAll();
         }
     } catch (e) {
         console.warn("Chyba pri sťahovaní správ:", e);
+        if (isManualClick) addLog(`⚠️ Chyba pri obnove správ: ${e.message}`, "warn");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "🔄 Obnoviť správy";
+        }
     }
 }
 
@@ -1091,9 +1208,13 @@ function evaluateOpenPositions() {
             continue;
         }
 
-        // 4. Check AI Signal Reversal (only on severe multi-factor breakdown <= -38, preventing premature panic exits on 5m noise)
+        // 4. Check AI Signal Reversal or Severe Breaking Bearish News
         if (mkt.aiScore <= -38) {
             executeSellPosition(pos.id, `Silný obrat AI trendu (Skóre ${mkt.aiScore})`);
+            continue;
+        }
+        if ((mkt.sentimentScore || 0) <= -45 && mkt.price < (mkt.ema9 || mkt.price)) {
+            executeSellPosition(pos.id, `📰 Núdzový predaj: Negatívna správa v médiách (Sentiment ${mkt.sentimentScore})`);
             continue;
         }
 
@@ -1179,6 +1300,9 @@ async function executeBuyPosition(mkt, amountEur) {
     const tpUsd = Math.round(priceUsd * (1 + tpPct / 100) * 10000) / 10000;
 
     const reasonParts = [isEu ? `🇩🇪 EUR 0% FX` : `⚡ ${lev}x Páka`, `AI +${mkt.aiScore}`];
+    if (mkt.sentimentScore && mkt.sentimentScore > 0) {
+        reasonParts.push(`📰 Správy +${mkt.sentimentScore}`);
+    }
     if (mkt.reputationBonus) {
         reasonParts.push(`Pamäť ${mkt.reputationBonus > 0 ? "+" : ""}${mkt.reputationBonus}b`);
     }
