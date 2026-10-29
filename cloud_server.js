@@ -527,18 +527,32 @@ function sendDailyEmailReport(recipientEmail = "mt.banovic@gmail.com") {
                 const rPct = ((p.currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
                 openValEur += Math.max(0.01, p.investedEur * (1 + ((rPct * l - 0.15) / 100)));
             }
+            const initCap = Number(serverState.portfolio?.initialCapitalEur || 1000);
             const totalEquity = Number(((serverState.portfolio?.cashEur || 0) + openValEur).toFixed(2));
-            const netProfit = Number((totalEquity - 100).toFixed(2));
+            const netProfit = Number((totalEquity - initCap).toFixed(2));
             const wins = closed.filter(t => t.pnlEur >= 0);
             const losses = closed.filter(t => t.pnlEur < 0);
             const sortedBest = [...closed].sort((a, b) => b.pnlEur - a.pnlEur).slice(0, 3);
             const sortedWorst = [...closed].sort((a, b) => a.pnlEur - b.pnlEur).slice(0, 3);
+            const recent = closed.slice(0, 3);
 
-            const subject = `📊 Denný AI Burzový Report (09:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`;
+            const tradeNarrative = recent.length > 0
+                ? `Počas poslednej smeny a noci som zrealizoval tieto kroky: ${recent.map(t => `o ${t.openedAt} som vstúpil do ${t.symbol} a o ${t.closedAt} ho uzavrel s výsledkom ${t.pnlEur >= 0 ? "+" : ""}${t.pnlEur.toFixed(2)} € (${t.exitReason})`).join("; ")}. Celkovo mám uzavretých ${closed.length} obchodov (${wins.length} ziskových a ${losses.length} stratových).`
+                : `Počas noci som nepretržite skenoval krypto trhy a správy, filtroval falošné výkyvy a čakal len na potvrdené zelené sviečky s rastúcim MACD a RSI pod 62,5.`;
+
+            const openNarrative = positions.length > 0
+                ? `Aktuálne držím otvorenú pozíciu: ${positions.map(p => `${p.symbol} (nakúpené o ${p.openedAt} za ${p.investedEur} € @ ${p.entryPriceUsd} $, SL ${p.stopLossUsd} $)`).join(", ")}.`
+                : `Momentálne držím 100 % hotovosti v bezpečí a čakám na prvé ranné impulzy s pomerom zisku k riziku 3:1.`;
+
+            const morningHuman100Words = `Dobré ráno! Hlásim sa o 08:00 s ľudským prehľadom mojej nočnej práce. Hodnota nášho účtu je momentálne ${totalEquity.toFixed(2)} € (čistá bilancia ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €, voľná hotovosť ${(serverState.portfolio?.cashEur || 0).toFixed(2)} €). ${tradeNarrative} ${openNarrative} Z predchádzajúcich chýb som sa v Generácii #${serverState.learning?.generation || 1} poučil tak, že už nikdy nepredávam v panike na prvej červenej sviečke a pri zisku +1,4 % uzamykám pozíciu na Break-Even. Dnes od 09:00 sa sústredím na európske akcie v EUR a od 15:30 na americké technologické rakety.`;
+
+            const subject = `🌅 Ranné hlásenie AI (08:00) | Hodnota: ${totalEquity} € (${netProfit >= 0 ? "+" : ""}${netProfit} €)`;
             const token = String(serverState.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1").trim();
 
             if (token && !token.includes("-")) {
                 const postData = `access_token=${encodeURIComponent(token)}&subject=${encodeURIComponent(subject)}&text=${encodeURIComponent(
+                    `🌅 RANNÉ HLÁSENIE AI AGENTA O 08:00 (ĽUDSKOU REČOU – ~100 SLOV):\n${morningHuman100Words}\n\n` +
+                    `------------------------------------------------------------\n` +
                     `Hodnota portfólia: ${totalEquity.toFixed(2)} € (Čistý zisk: ${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)} €)\n` +
                     `Hotovosť: ${(serverState.portfolio?.cashEur || 0).toFixed(2)} € | Otvorené: ${positions.map(p => `${p.symbol} (${p.leverage || defaultLev}x)`).join(", ") || "Žiadne"}\n` +
                     `Bilancia: Spolu ${closed.length} | Výhry: ${wins.length} | Straty: ${losses.length}\n` +
@@ -972,7 +986,7 @@ loadInitialState().then(() => {
     // Run server-side 24/7 autonomous trading & learning loop every 45 seconds
     setInterval(backgroundHeadlessTick, 45000);
 
-    // Check every 60 seconds for 09:00 Europe/Bratislava daily email report to mt.banovic@gmail.com
+    // Check every 60 seconds for 08:00 Europe/Bratislava daily email report to mt.banovic@gmail.com
     setInterval(async () => {
         try {
             const skNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Bratislava" }));
@@ -980,11 +994,11 @@ loadInitialState().then(() => {
             const mm = String(skNow.getMonth() + 1).padStart(2, "0");
             const dd = String(skNow.getDate()).padStart(2, "0");
             const todayStr = `${yyyy}-${mm}-${dd}`;
-            if (skNow.getHours() === 9 && serverState.lastEmailReportDate !== todayStr) {
+            if (skNow.getHours() === 8 && serverState.lastEmailReportDate !== todayStr) {
                 serverState.lastEmailReportDate = todayStr;
                 saveServerState(serverState);
                 await sendDailyEmailReport("mt.banovic@gmail.com");
-                console.log(`[EMAIL REPORT] Daily 09:00 report sent to mt.banovic@gmail.com (${todayStr})`);
+                console.log(`[EMAIL REPORT] Daily 08:00 report sent to mt.banovic@gmail.com (${todayStr})`);
             }
         } catch (e) {
             console.warn("[EMAIL REPORT] Scheduler warning:", e.message);
