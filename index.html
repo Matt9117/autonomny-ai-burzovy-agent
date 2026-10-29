@@ -326,7 +326,7 @@
                     <div class="card-title">
                         📰 Sledované správy z burzy & NLP Sentiment Analýza
                     </div>
-                    <button class="btn btn-sm" onclick="fetchAllNews()">Obnoviť správy</button>
+                    <button id="btnRefreshNews" class="btn btn-sm" onclick="fetchAllNews(true)">🔄 Obnoviť správy</button>
                 </div>
                 <div class="card-body">
                     <div id="newsFeedList" class="feed-list">
@@ -471,6 +471,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=8"></script>
+    <script src="app.js?v=9"></script>
 </body>
 </html>
