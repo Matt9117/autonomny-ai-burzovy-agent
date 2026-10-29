@@ -3,8 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Autonómny AI Burzový Agent | 1 000 € Day-Trading & Trading 212 Engine</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>Autonómny AI Burzový Agent | Hybrid MLP Neural Net + Gemini/Groq LLM Brain</title>
+    <link rel="stylesheet" href="styles.css?v=13">
+    <style>
+        body { overflow-x: auto !important; }
+        .container { max-width: 100% !important; width: 100% !important; padding: 12px 14px !important; }
+        .main-grid { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) !important; gap: 14px !important; width: 100% !important; }
+        .bottom-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) !important; gap: 14px !important; width: 100% !important; }
+        .main-grid > *, .bottom-grid > *, .kpi-grid > *, .card { min-width: 0 !important; max-width: 100% !important; }
+        @media (max-width: 1240px) {
+            .main-grid, .bottom-grid { grid-template-columns: minmax(0, 1fr) !important; }
+        }
+        th, td { padding: 6px 7px !important; font-size: 11.5px !important; }
+    </style>
 </head>
 <body>
 
@@ -259,22 +270,55 @@
                     </div>
                 </div>
 
-                <!-- Self-Learning Brain & Adaptive Weights -->
-                <div class="card">
+                <!-- 08:00 Morning Human-Language Narrative (~100 words) -->
+                <div class="card" style="border-left: 4px solid var(--accent-cyan);">
                     <div class="card-header">
                         <div class="card-title">
-                            🧠 Mozog Agenta & Hĺbkové učenie (Reinforcement + ATR + Pamäť akcií)
+                            🌅 Ranné hlásenie AI o 08:00 (Ľudskou rečou na ~100 slov)
                         </div>
-                        <div style="display:flex; gap:6px;">
-                            <button id="btnTrainHistory" class="btn btn-sm btn-primary" onclick="runHistoricalTraining()" title="Stiahne 5-dňovú históriu všetkých sledovaných akcií (~18 000 sviečok), nasimuluje stovky obchodov a natrénuje váhy aj reputáciu každej akcie">
-                                🏋️ Trénovať AI na histórii (5 dní)
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <span id="morningStoryWordCount" class="badge badge-profit">Auto 08:00 • ~100 slov</span>
+                            <button class="btn btn-sm btn-primary" onclick="sendDailyReportEmailNow()" title="Okamžite odoslať toto ľudské hlásenie a súhrn na mt.banovic@gmail.com">
+                                📧 Poslať na mail
                             </button>
                         </div>
                     </div>
                     <div class="card-body">
+                        <div id="morningHumanNarrativeBox" style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:13px; line-height:1.6; color:var(--text-primary);">
+                            Generujem prehľad nočnej a dennej aktivity agenta ľudskou rečou...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Self-Learning Brain & Adaptive Weights -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            🧠 Hybrid AI Mozog: 10→8→1 MLP Neurónová Sieť + Gemini / Groq LLM
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                            <span id="nnStatusBadge" class="badge badge-profit">MLP Sieť: 88 synapsií aktívnych</span>
+                            <button id="btnTrainHistory" class="btn btn-sm btn-primary" onclick="runHistoricalTraining()" title="Stiahne 5-dňovú históriu všetkých sledovaných akcií (~18 000 sviečok), nasimuluje stovky obchodov a cez Backpropagation natrénuje 88 synapsií neurónovej siete">
+                                🏋️ Pretrénovať Neurónovú Sieť (5 dní)
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div style="background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                            <div>
+                                <strong>🤖 Kognitívny AI Mozog (Gemini 2.5 Flash / Groq Llama-3.3-70B):</strong>
+                                <span id="llmBrainStatusLabel" class="badge badge-neutral" style="margin-left:4px;">Vrstva 1: MLP Neurónová Sieť (Vložte API kľúč pre Vrstvu 2 LLM)</span>
+                            </div>
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                <input type="password" id="llmApiKeyInput" class="form-control" style="width:185px; padding:4px 8px; font-size:11.5px;" placeholder="AIza... (Gemini) alebo gsk_... (Groq)">
+                                <button class="btn btn-sm btn-primary" onclick="saveLlmApiKey()">💾 Aktivovať LLM</button>
+                                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;">🔑 Získať Free Gemini kľúč</a>
+                            </div>
+                        </div>
+
                         <div id="trainingSummaryBanner" style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                            <span>📊 <strong>Tréningová pamäť:</strong> <span id="lblTrainedTrades">0</span> natrénovaných obchodov na historických a živých dátach</span>
-                            <span id="lblAtrMode" class="badge badge-profit">Adaptívny ATR Stop-Loss Aktívny</span>
+                            <span>📊 <strong>Tréningová pamäť MLP Siete:</strong> <span id="lblTrainedTrades">0</span> natrénovaných obchodov (Backpropagation)</span>
+                            <span id="lblAtrMode" class="badge badge-profit">Pravdepodobnosť výhry P(win) &gt; 64%</span>
                         </div>
 
                         <div class="weights-grid" id="weightsContainer">
@@ -471,6 +515,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=13"></script>
 </body>
 </html>
