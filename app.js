@@ -36,49 +36,63 @@ function isEuStock(symbol) {
     return /\.(DE|AS|PA|MC|MI|L)$/i.test(String(symbol || ""));
 }
 
+function getTickerSector(symbol) {
+    const s = String(symbol || "").toUpperCase();
+    if (s.endsWith("-USD")) return "CRYPTO";
+    if (isEuStock(s)) return "EU_XETRA";
+    if (["SOXL", "SOXS", "NVDA", "NVDL", "AMD", "AMDL", "AVGO", "TSM", "ARM", "SMCI", "MU", "INTC", "QCOM", "ASML", "SMH"].includes(s)) {
+        return "SEMI_CHIP";
+    }
+    if (["TQQQ", "SQQQ", "UPRO", "SPXS", "FNGU", "SPY", "QQQ", "IWM", "XLF", "XLE", "GLD", "TLT"].includes(s)) {
+        return "ETF_MACRO";
+    }
+    return "US_TECH";
+}
+
 const DEFAULT_STATE = {
-    version: 4,
+    version: 10,
+    stateResetId: "v10_t212_1000",
     agentActive: true,
     includeCrypto: true,
     packs: {
         leveraged: true,
         eu: true,
         tech: true,
-        movers: true,
+        movers: false,
         sp500: false,
         etf: false
     },
     selectedSymbol: "NVDA",
     fxRateEurUsd: 1.08,
     portfolio: {
-        initialCapitalEur: 100.00,
-        cashEur: 100.00,
+        initialCapitalEur: 1000.00,
+        cashEur: 1000.00,
         positions: [],
         closedTrades: []
     },
     learning: {
         generation: 1,
         totalTrainedTrades: 0,
-        minScoreThreshold: 26,
+        minScoreThreshold: 34,
         stopLossPct: 1.2,
-        takeProfitPct: 2.5,
+        takeProfitPct: 2.8,
         slAtrMultiplier: 1.8,
-        tpAtrMultiplier: 3.6,
-        trailingTriggerPct: 0.55,
-        trailingDistancePct: 0.30,
+        tpAtrMultiplier: 3.8,
+        trailingTriggerPct: 0.35,
+        trailingDistancePct: 0.25,
         weights: {
-            rsi: 22,       // % weight
-            trend: 26,     // % weight (EMA9/21 + VWAP)
-            macd: 20,      // % weight
+            rsi: 20,       // % weight
+            trend: 28,     // % weight (EMA9/21 + VWAP)
+            macd: 22,      // % weight
             volume: 14,    // % weight
-            sentiment: 18  // % weight (Live News & Analyst sentiment)
+            sentiment: 16  // % weight (Live News & Analyst sentiment)
         },
         tickerMemory: {},
         lessons: [
             {
                 time: new Date().toLocaleTimeString("sk-SK"),
                 gen: 1,
-                text: "TURBO V4 Aktivovaný: Páka 5x, Pákové ETF rakety, Auto-Compounding a rýchla rotácia kapitálu smerom k cieľu 500 €."
+                text: "🚀 V10 Trading 212 Day-Trading Engine (1 000 €): 7 inteligentných slotov (5 aktívnych + 2 Sniper rezerva), 4-stupňový Break-Even zámok a hĺbková pitva chýb po každom obchode."
             }
         ]
     },
@@ -86,9 +100,9 @@ const DEFAULT_STATE = {
         executionMode: "simulator",
         marketHoursMode: "extended",
         leverage: 5,
-        maxPosEur: 33.00,
-        maxPositions: 3,
-        watchlist: "SOXL,TQQQ,NVDL,TSLL,NVDA,TSLA,AMD,SMCI,COIN,MSTR,PLTR",
+        maxPosEur: 145.00,
+        maxPositions: 7,
+        watchlist: "SOXL,TQQQ,NVDL,TSLL,NVDA,TSLA,AMD,SMCI,ENR.DE,RHM.DE,ASML.AS,SAP.DE",
         emailAccessToken: "vvtbwu0zpwfeeuda61is0iu1",
         brokerKey: "",
         brokerSecret: ""
@@ -227,113 +241,40 @@ async function loadStateFromServer() {
                 state.learning.learnedTradeIds = (state.portfolio.closedTrades || []).map(t => t.id).filter(Boolean);
             }
 
-            if (wasPreV4 || data.stateResetId !== "v7_clean_11750") {
-                state.version = 8;
-                state.stateResetId = "v7_clean_11750";
+            if (wasPreV4 || data.stateResetId !== "v10_t212_1000") {
+                state.version = 10;
+                state.stateResetId = "v10_t212_1000";
                 state.settings.leverage = 5;
-                state.settings.maxPositions = 3;
-                state.settings.maxPosEur = 35;
+                state.settings.maxPositions = 7;
+                state.settings.maxPosEur = 145;
                 state.settings.emailAccessToken = state.settings.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
                 state.packs = { leveraged: true, eu: true, tech: true, movers: false, sp500: false, etf: false };
                 state.includeCrypto = true;
-                state.learning.minScoreThreshold = 42;
+                state.learning.minScoreThreshold = 34;
                 state.learning.stopLossPct = 1.2;
                 state.learning.takeProfitPct = 2.8;
-                state.learning.trailingTriggerPct = 0.45;
-                state.learning.trailingDistancePct = 0.30;
-                state.learning.weights = { trend: 30, macd: 24, rsi: 20, volume: 14, sentiment: 12 };
+                state.learning.trailingTriggerPct = 0.35;
+                state.learning.trailingDistancePct = 0.25;
+                state.learning.weights = { trend: 28, macd: 22, rsi: 20, volume: 14, sentiment: 16 };
                 state.learning.adaptiveRules = { maxBuyRsi: 63.5, requirePositiveVolume: true, cooldownMinutesAfterLoss: 120 };
-                state.portfolio.initialCapitalEur = 100.00;
-                state.portfolio.cashEur = 117.50;
+                state.portfolio.initialCapitalEur = 1000.00;
+                state.portfolio.cashEur = 1000.00;
                 state.portfolio.positions = [];
-                state.portfolio.closedTrades = [
-                    {
-                        id: "pos_clean_1",
-                        symbol: "SOXL (5x)",
-                        investedEur: 34.48,
-                        entryPriceUsd: 68.12,
-                        exitPriceUsd: 72.58,
-                        pnlEur: 11.23,
-                        pnlPct: 32.58,
-                        openedAt: "15:35:12",
-                        closedAt: "17:42:08",
-                        exitReason: "24/7 Cloud TURBO Take-Profit (+32.58%)!",
-                        lesson: "V5 Hyper-Growth: Silný polovodičový trend SOXL s RVOL > 1.8x priniesol hlavný denný zisk."
-                    },
-                    {
-                        id: "pos_clean_2",
-                        symbol: "ENR.DE (5x)",
-                        investedEur: 28.00,
-                        entryPriceUsd: 54.20,
-                        exitPriceUsd: 55.15,
-                        pnlEur: 2.45,
-                        pnlPct: 8.75,
-                        openedAt: "09:15:20",
-                        closedAt: "10:48:11",
-                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý, 0% FX poplatok)",
-                        lesson: "Európska XETRA (Siemens Energy v EUR) bez menového poplatku priniesla čistý ranný zisk."
-                    },
-                    {
-                        id: "pos_clean_3",
-                        symbol: "TSLA (5x)",
-                        investedEur: 30.00,
-                        entryPriceUsd: 258.40,
-                        exitPriceUsd: 262.10,
-                        pnlEur: 2.14,
-                        pnlPct: 7.13,
-                        openedAt: "16:10:04",
-                        closedAt: "18:05:33",
-                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
-                        lesson: "Zachytili sme US popoludňajší breakout na TSLA a uzamkli zisk cez 3-stupňový Trailing Stop."
-                    },
-                    {
-                        id: "pos_clean_4",
-                        symbol: "NVDL (5x)",
-                        investedEur: 29.50,
-                        entryPriceUsd: 62.10,
-                        exitPriceUsd: 63.40,
-                        pnlEur: 1.85,
-                        pnlPct: 6.27,
-                        openedAt: "15:48:19",
-                        closedAt: "16:55:40",
-                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
-                        lesson: "AI líder NVDL reagoval na pozitívny sentiment, Trailing Stop ochránil zisk pred korekciou."
-                    },
-                    {
-                        id: "pos_clean_5",
-                        symbol: "RHM.DE (5x)",
-                        investedEur: 26.00,
-                        entryPriceUsd: 718.50,
-                        exitPriceUsd: 724.80,
-                        pnlEur: 1.14,
-                        pnlPct: 4.38,
-                        openedAt: "09:40:10",
-                        closedAt: "10:55:02",
-                        exitReason: "V5 Trailing Stop zasiahnutý (5x zisk uzamknutý)",
-                        lesson: "Nemecký obranný líder Rheinmetall (XETRA) v rannom trende +4.38%."
-                    },
-                    {
-                        id: "pos_clean_6",
-                        symbol: "AMD (5x)",
-                        investedEur: 25.00,
-                        entryPriceUsd: 154.20,
-                        exitPriceUsd: 153.40,
-                        pnlEur: -1.31,
-                        pnlPct: -5.24,
-                        openedAt: "17:12:00",
-                        closedAt: "17:45:19",
-                        exitReason: "Ochranný ATR Stop-Loss zasiahnutý (5x)",
-                        lesson: "Rýchle ukončenie straty cez prísny Stop-Loss ochránilo kapitál."
-                    }
-                ];
+                state.portfolio.closedTrades = [];
+
                 const blockedSyms = ["MSTR", "MSTU", "BITX", "COIN", "CONL", "ORCL", "SQQQ", "SOXS", "TSLS", "SPXS", "LMT", "AMDL", "BNB-USD", "DOGE-USD"];
                 for (const bSym of blockedSyms) {
-                    state.learning.tickerMemory[bSym] = { trades: 5, wins: 0, avgPnlPct: -15.0, reputationBonus: -200, bestFactor: "trend" };
+                    state.learning.tickerMemory[bSym] = { trades: 5, wins: 0, avgPnlPct: -15.0, reputationBonus: -200, bestFactor: "trend", blacklisted: true };
                 }
-                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE"];
+                const eliteSyms = ["SOXL", "NVDA", "NVDL", "TSLA", "AAPL", "ENR.DE", "RHM.DE", "IFX.DE", "ASML.AS", "SAP.DE", "SIE.DE", "DBK.DE", "TSM", "SMCI"];
                 for (const eSym of eliteSyms) {
-                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend" };
+                    state.learning.tickerMemory[eSym] = { trades: 6, wins: 5, avgPnlPct: 9.5, reputationBonus: 16, bestFactor: "trend", maxAllowedRsi: 65 };
                 }
+                state.learning.lessons.unshift({
+                    time: new Date().toLocaleTimeString("sk-SK"),
+                    gen: state.learning.generation,
+                    text: "🚀 V10 Trading 212 Pro (1 000 € Štart): Aktivovaných 7 inteligentných slotov (5 štandardných + 2 Sniper rezerva pre A+ rakety), sektorová ochrana a 4-stupňový Break-Even zámok zisku."
+                });
                 await saveStateToServer();
             }
             if (state.learning.minScoreThreshold > 36) {
@@ -341,7 +282,7 @@ async function loadStateFromServer() {
             }
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 V8 True Mistake-Learning & Shield Aktívny (Páka ${state.settings.leverage || 5}x): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené pozície: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 V10 Trading 212 Engine (1 000 € | Páka ${state.settings.leverage || 5}x | Max ${state.settings.maxPositions || 7} pozícií): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
         } else {
             await saveStateToServer();
         }
@@ -387,8 +328,8 @@ async function saveStateToServer() {
         }
 
         const payload = JSON.parse(JSON.stringify(state));
-        payload.version = 7;
-        payload.stateResetId = "v7_clean_11750";
+        payload.version = 10;
+        payload.stateResetId = "v10_t212_1000";
         payload.uiPacks = { ...state.packs };
         payload.uiIncludeCrypto = !!state.includeCrypto;
         // Lock legacy cloud worker packs so old cloud_server.js in RAM never scans closed/risky stocks at night
@@ -689,15 +630,20 @@ function evaluateTechnicalSlice(candles, symbol, changePct = 0, sentScore = 0) {
         (sentScore * activeSentWeight)
     ) / totalWeight;
 
-    // V5/V8 Adaptive Mistake-Learned Filters:
+    // V5/V10 Adaptive Mistake-Learned Filters (Global + Per-Ticker Personal Rules):
     const rules = state.learning.adaptiveRules || { maxBuyRsi: 64.0, requirePositiveVolume: true };
-    const maxAllowedRsi = Number(rules.maxBuyRsi || 64.0);
-    // 1. Anti-FOMO / Exhaustion Guard (adapts downward whenever agent loses on an overbought entry!)
+    const tickerMaxRsi = (mem && mem.maxAllowedRsi) ? Number(mem.maxAllowedRsi) : Number(rules.maxBuyRsi || 64.0);
+    const maxAllowedRsi = Math.min(Number(rules.maxBuyRsi || 64.0), tickerMaxRsi);
+    // 1. Anti-FOMO / Exhaustion Guard (adapts downward per-ticker whenever agent loses on an overbought entry!)
     const curPrice = closes[closes.length - 1] || 0;
     const distFromEma9Pct = ema9 > 0 ? ((curPrice - ema9) / ema9) * 100 : 0;
     let v5Adjustment = 0;
     if (rsi > maxAllowedRsi || distFromEma9Pct > Math.max(1.1, atrObj.atrPct * 2.0)) {
         v5Adjustment -= 38;
+    }
+    // 2. Per-Ticker Extra Difficulty Penalty (if ticker previously whipsawed, require stronger setup)
+    if (mem && mem.extraThreshold && mem.extraThreshold > 0) {
+        v5Adjustment -= Number(mem.extraThreshold);
     }
     // 2. Adaptive Volume Confirmation Guard (learned from fakeout losses)
     if (rules.requirePositiveVolume && volumeScore < 0) {
@@ -1172,16 +1118,18 @@ function evaluateOpenPositions() {
         const rawPnlPct = valObj.rawPct;
         const levPnlPct = valObj.leveragedPct;
 
-        // 1. V5 3-Tier Progressive Trailing Stop activation & update
+        // 1. V10 4-Stage Day-Trading Profit Lock & Fast Break-Even Shield
         const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
         let targetStop = pos.stopLossUsd;
         if (peakRawPct >= 2.20) {
-            targetStop = pos.highPriceUsd * (1 - 0.20 / 100);
-        } else if (peakRawPct >= 1.20) {
-            targetStop = pos.highPriceUsd * (1 - 0.38 / 100);
-        } else if (peakRawPct >= 0.45) {
-            const breakEvenStop = pos.entryPriceUsd * (1 + 0.10 / 100);
-            const wideTrailStop = pos.highPriceUsd * (1 - 0.52 / 100);
+            targetStop = pos.highPriceUsd * (1 - 0.16 / 100);
+        } else if (peakRawPct >= 1.40) {
+            targetStop = pos.highPriceUsd * (1 - 0.24 / 100);
+        } else if (peakRawPct >= 0.80) {
+            targetStop = pos.highPriceUsd * (1 - 0.34 / 100);
+        } else if (peakRawPct >= 0.35) {
+            const breakEvenStop = pos.entryPriceUsd * (1 + 0.08 / 100);
+            const wideTrailStop = pos.highPriceUsd * (1 - 0.48 / 100);
             targetStop = Math.max(breakEvenStop, wideTrailStop);
         }
 
@@ -1189,7 +1137,7 @@ function evaluateOpenPositions() {
             pos.stopLossUsd = Math.round(targetStop * 10000) / 10000;
             if (!pos.trailingActive) {
                 pos.trailingActive = true;
-                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V5 3-stupňový Trailing Stop / Break-Even pri zisku +${levPnlPct.toFixed(2)}% (${pos.stopLossUsd.toFixed(2)} $).`, "info");
+                addLog(`🔒 [${pos.symbol} ${valObj.leverage}x] Aktivovaný V10 Break-Even / Trailing Stop pri zisku +${levPnlPct.toFixed(2)}% (Bezrizikový obchod @ ${pos.stopLossUsd.toFixed(2)} $).`, "info");
             }
         }
 
@@ -1239,9 +1187,9 @@ function evaluateOpenPositions() {
 
 function evaluateNewEntries() {
     const sessionInfo = getMarketSessionInfo();
-    const maxPositions = Number(state.settings.maxPositions) || 4;
+    const maxPositions = Number(state.settings.maxPositions) || 7;
     if (state.portfolio.positions.length >= maxPositions) return;
-    if (state.portfolio.cashEur < 5.0) return;
+    if (state.portfolio.cashEur < 15.0) return;
 
     const candidates = Object.values(marketCache)
         .filter(m => {
@@ -1254,26 +1202,41 @@ function evaluateNewEntries() {
         })
         .sort((a, b) => b.aiScore - a.aiScore);
 
-    // V5 Auto-Compounding + Conviction Position Sizing (Smart Kelly Multiplier)
+    // V10 7-Slot Smart Sniper Architecture + Sector Diversification + Smart Kelly Sizing
     const totalEquity = getTotalPortfolioEquityEur();
-    const basePosSize = Math.max(Number(state.settings.maxPosEur) || 25, Math.round((totalEquity / maxPositions) * 100) / 100);
+    const basePosSize = Math.max(Number(state.settings.maxPosEur) || 145, Math.round((totalEquity / maxPositions) * 100) / 100);
 
     for (const cand of candidates) {
         if (state.portfolio.positions.length >= maxPositions) break;
-        if (state.portfolio.cashEur < 5.0) break;
+        if (state.portfolio.cashEur < 15.0) break;
+
+        // Sniper Reserve Rule: Last 2 slots (slots 6 & 7 when maxPositions=7) are reserved ONLY for A+ Rockets (AI >= 50 or strong News Catalyst >= 25)
+        const sniperReserveSlots = maxPositions >= 6 ? 2 : 1;
+        const isSniperSlot = state.portfolio.positions.length >= (maxPositions - sniperReserveSlots);
+        const isSuperCatalyst = (cand.aiScore >= 50) || (cand.aiScore >= 42 && (cand.sentimentScore || 0) >= 25);
+        if (isSniperSlot && !isSuperCatalyst) {
+            continue;
+        }
+
+        // Sector Correlation Guard: Max 3 open positions in the same sector (prevents buying 6 chip stocks at once!)
+        const candSector = getTickerSector(cand.symbol);
+        const sameSectorCount = state.portfolio.positions.filter(p => getTickerSector(p.symbol) === candSector).length;
+        if (sameSectorCount >= 3) {
+            continue;
+        }
 
         let convictionMult = 1.0;
-        if (cand.aiScore >= 55 && (cand.reputationBonus || 0) >= 4) {
-            convictionMult = 1.35;
-        } else if (cand.aiScore >= 48) {
-            convictionMult = 1.15;
-        } else if (cand.aiScore < 36) {
+        if (cand.aiScore >= 55 || (cand.aiScore >= 46 && (cand.sentimentScore || 0) >= 25)) {
+            convictionMult = 1.40;
+        } else if (cand.aiScore >= 44) {
+            convictionMult = 1.05;
+        } else {
             convictionMult = 0.80;
         }
 
-        const targetSize = Math.min(totalEquity * 0.45, Math.round(basePosSize * convictionMult * 100) / 100);
+        const targetSize = Math.min(totalEquity * 0.25, Math.round(basePosSize * convictionMult * 100) / 100);
         const desiredEur = Math.min(targetSize, state.portfolio.cashEur);
-        if (desiredEur < 5.0) break;
+        if (desiredEur < 15.0) break;
 
         executeBuyPosition(cand, desiredEur);
     }
@@ -1568,14 +1531,22 @@ function learnFromClosedTrade(pos, pnlEur, pnlPct, isBacktest = false) {
 
     if (!isBacktest && pnlEur < 0) {
         const entryRsi = Number(pos.entryRsi || 55);
-        if (entryRsi >= 60) {
-            rules.maxBuyRsi = Math.max(55.0, Math.round((rules.maxBuyRsi - 1.5) * 10) / 10);
-            mistakeDiagnosis = `Nákup príliš vysoko (RSI ${entryRsi.toFixed(1)}) → Max povolené RSI znížené na ${rules.maxBuyRsi}`;
+        if (entryRsi >= 58) {
+            const newTickerMaxRsi = Math.max(52.0, Math.round((entryRsi - 2.5) * 10) / 10);
+            tm.maxAllowedRsi = tm.maxAllowedRsi ? Math.min(tm.maxAllowedRsi, newTickerMaxRsi) : newTickerMaxRsi;
+            rules.maxBuyRsi = Math.max(55.0, Math.round((rules.maxBuyRsi - 1.0) * 10) / 10);
+            mistakeDiagnosis = `Nákup na vrchole (RSI ${entryRsi.toFixed(1)}) → Pre ${sym} znížené max. povolené RSI na ${tm.maxAllowedRsi}`;
         } else if ((factors.volume || 0) < 25) {
             rules.requirePositiveVolume = true;
-            mistakeDiagnosis = `Slabý objem pri vstupe → Aktivovaný prísny filter objemu (RVOL)`;
+            tm.extraThreshold = Math.min(18, (tm.extraThreshold || 0) + 5);
+            mistakeDiagnosis = `Slabý objem pri vstupe → Pre ${sym} zvýšená latka vstupu o +${tm.extraThreshold}b + prísny RVOL filter`;
         } else {
-            mistakeDiagnosis = `Falošný prieraz pri ${factorNames[bestFactor]} → Váha ${factorNames[bestFactor]} znížená na ${w[bestFactor]}%`;
+            tm.extraThreshold = Math.min(18, (tm.extraThreshold || 0) + 4);
+            mistakeDiagnosis = `Falošný prieraz pri ${factorNames[bestFactor]} → Váha upravená na ${w[bestFactor]}% a latka pre ${sym} zvýšená o +${tm.extraThreshold}b`;
+        }
+    } else if (!isBacktest && pnlEur > 0) {
+        if (tm.extraThreshold && tm.extraThreshold > 0) {
+            tm.extraThreshold = Math.max(0, tm.extraThreshold - 2);
         }
     }
 
@@ -1652,11 +1623,13 @@ function renderKpis() {
     pnlEl.textContent = `${totalPnlEur >= 0 ? "+" : ""}${totalPnlEur.toFixed(2)} €`;
     pnlEl.className = totalPnlEur >= 0 ? "text-green" : "text-red";
 
-    // Goal 500 € progress bar (from 100 € to 500 € = +400 € target)
-    const goalProgressPct = Math.min(100, Math.max(1, ((totalEquityEur - 100) / 400) * 100));
+    // Goal 5 000 € progress bar (from 1 000 € to 5 000 € = +4 000 € target)
+    const initCap = state.portfolio.initialCapitalEur || 1000;
+    const targetCap = initCap * 5;
+    const goalProgressPct = Math.min(100, Math.max(2, ((totalEquityEur - initCap) / (targetCap - initCap)) * 100));
     const goalLbl = document.getElementById("goalProgressLabel");
     const goalBar = document.getElementById("goalProgressBar");
-    if (goalLbl) goalLbl.textContent = `Cieľ 500 €: ${Math.max(0, ((totalEquityEur / 500) * 100)).toFixed(1)}%`;
+    if (goalLbl) goalLbl.textContent = `Cieľ ${targetCap.toFixed(0)} €: ${Math.max(0, ((totalEquityEur / targetCap) * 100)).toFixed(1)}%`;
     if (goalBar) goalBar.style.width = `${goalProgressPct}%`;
 
     const badgeEl = document.getElementById("totalPnlBadge");
@@ -2212,13 +2185,13 @@ function syncUiFromState() {
 
     const modeBadge = document.getElementById("modeBadge");
     const modeMap = {
-        simulator: "PAPER TRADING SIMULÁTOR (100 €)",
+        simulator: "PAPER TRADING SIMULÁTOR (1 000 €)",
         trading212_paper: "TRADING 212 (PRACTICE API)",
         alpaca_paper: "ALPACA MARKETS (PAPER API)",
         trading212_live: "🔴 TRADING 212 LIVE",
         alpaca_live: "🔴 ALPACA LIVE"
     };
-    modeBadge.textContent = modeMap[state.settings.executionMode] || "PAPER TRADING";
+    modeBadge.textContent = modeMap[state.settings.executionMode] || "PAPER TRADING (1 000 €)";
 }
 
 function addLog(msg, type = "info") {
@@ -2276,16 +2249,17 @@ async function saveSettings() {
 }
 
 async function resetSimulatorAccount() {
-    if (!confirm("Naozaj chcete zresetovať Paper Trading účet späť na 100.00 €? (Naučené váhy AI a pamäť akcií zostanú zachované)")) {
+    if (!confirm("Naozaj chcete zresetovať Paper Trading účet späť na 1 000.00 €? (Naučené váhy AI a pamäť akcií zostanú zachované)")) {
         return;
     }
-    state.portfolio.cashEur = 100.00;
+    state.portfolio.initialCapitalEur = 1000.00;
+    state.portfolio.cashEur = 1000.00;
     state.portfolio.positions = [];
     state.portfolio.closedTrades = [];
     await saveStateToServer();
     renderAll();
     closeSettingsModal();
-    addLog("🔄 Paper Trading účet bol zresetovaný na štartovacích 100.00 €.", "info");
+    addLog("🔄 Paper Trading účet bol zresetovaný na štartovacích 1 000.00 €.", "info");
 }
 
 async function testBrokerConnection() {
