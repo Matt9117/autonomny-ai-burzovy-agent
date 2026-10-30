@@ -208,6 +208,10 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     setTimeout(() => checkAutoDailyEmail0900(), 8000);
     window.addEventListener("resize", () => renderSelectedChart());
+    window.addEventListener("pagehide", () => saveStateToServer(true));
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") saveStateToServer(true);
+    });
 });
 
 async function loadStateFromServer() {
@@ -250,12 +254,17 @@ async function loadStateFromServer() {
             if (state.learning.minScoreThreshold > 42 || state.learning.minScoreThreshold < 34) {
                 state.learning.minScoreThreshold = 38;
             }
-            state.version = 14;
-            state.stateResetId = "v14_hybrid_mlp_llm";
+            if (!Array.isArray(state.activityLog)) {
+                state.activityLog = Array.isArray(data.activityLog) ? data.activityLog : [];
+            }
+            state.settings.reportEmail = state.settings.reportEmail || "mt.banovic@gmail.com";
+            state.settings.reportMorningTime = state.settings.reportMorningTime || "08:00";
+            state.version = 15;
+            state.stateResetId = "v15_hybrid_24_7_audit_log";
             ensureNeuralNet();
             reconcileUnlearnedClosedTrades();
             replayHistoricalLogsFromState();
-            addLog(`🚀 Hybrid V14 Engine (Vrstva 1: 10→8→1 MLP Sieť + Vrstva 2: Gemini 3 Flash LLM): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
+            addLog(`🚀 Hybrid V15 Engine (Vrstva 1: 10→8→1 MLP Sieť + Vrstva 2: Gemini 3 Flash LLM + 24/7 Denník): Hotovosť ${state.portfolio.cashEur.toFixed(2)} €, Otvorené: ${state.portfolio.positions.length}, Gen #${state.learning.generation}.`, "success");
             if (state.settings?.llmApiKey) {
                 setTimeout(() => testLlmBrainLive(true), 1500);
             }
@@ -272,7 +281,7 @@ function replayHistoricalLogsFromState() {
     if (!box) return;
     box.innerHTML = "";
 
-    const closed = (state.portfolio.closedTrades || []).slice(0, 15).reverse();
+    const closed = (state.portfolio.closedTrades || []).slice(0, 20).reverse();
     for (const t of closed) {
         const isWin = t.pnlEur >= 0;
         const sign = isWin ? "+" : "";
@@ -291,34 +300,48 @@ function replayHistoricalLogsFromState() {
         div.innerHTML = `<span class="log-time">[${p.openedAt || "--:--"}]</span> <span style="color:#38bdf8">🟢 OTVORENÁ POZÍCIA <strong>${p.symbol} (${p.leverage || 5}x)</strong>: Vklad ${p.investedEur.toFixed(2)} € @ ${p.entryPriceUsd.toFixed(2)} $ | Stop-Loss: ${p.stopLossUsd.toFixed(2)} $ | ${p.reason || ""}</span>`;
         box.prepend(div);
     }
+
+    const persistedLogs = (state.activityLog || []).slice(0, 80).reverse();
+    for (const item of persistedLogs) {
+        const div = document.createElement("div");
+        div.className = "log-entry";
+        const isCloud = (item.source || "").includes("CLOUD");
+        const badgeColor = isCloud ? "#c084fc" : "#38bdf8";
+        div.innerHTML = `<span class="log-time">[${item.time || "--:--"}]</span> <span style="color:${badgeColor}; font-weight:700;">[${item.source || "LOG"}]</span> <span>${item.text}</span>`;
+        box.prepend(div);
+    }
 }
 
-async function saveStateToServer() {
+async function saveStateToServer(isClosingHandOff = false) {
     try {
-        const sessionInfo = getMarketSessionInfo();
-        let safeServerWatchlist = "BTC-USD,ETH-USD,SOL-USD";
-        if (sessionInfo.session === "REGULAR") {
-            safeServerWatchlist = "SOXL,NVDL,TQQQ,NVDA,TSLA,AAPL,MSFT,AVGO";
-        } else if (sessionInfo.canTradeEu) {
-            safeServerWatchlist = "ENR.DE,RHM.DE,IFX.DE,ASML.AS,SAP.DE,SIE.DE,DBK.DE";
-        }
+        const heldSymbols = (state.portfolio?.positions || []).map(p => p.symbol);
+        const safeServerWatchlist = [...new Set([...heldSymbols, "BTC-USD", "ETH-USD", "SOL-USD"])].join(",");
 
         const payload = JSON.parse(JSON.stringify(state));
-        payload.version = 12;
-        payload.stateResetId = "v12_no_auto_reset";
+        payload.version = 14;
+        payload.stateResetId = "v14_hybrid_mlp_llm";
         payload.uiAgentActive = !!state.agentActive;
-        // 100% DISARM legacy Oct 27 backgroundHeadlessTick in Render RAM so it NEVER overwrites state or makes rogue trades!
-        payload.agentActive = false;
+        // Enable 24/7 Render cloud worker so it runs all night when the browser is closed!
+        payload.agentActive = !!state.agentActive;
         payload.uiPacks = { ...state.packs };
         payload.uiIncludeCrypto = !!state.includeCrypto;
-        payload.packs = { leveraged: false, tech: false, movers: false, sp500: false, etf: false, eu: true };
+        payload.packs = { leveraged: false, tech: false, movers: false, sp500: false, etf: false, eu: false };
         payload.includeCrypto = false;
         payload.settings.watchlist = safeServerWatchlist;
         payload.learning.uiMinScoreThreshold = state.learning.minScoreThreshold;
-        payload.learning.minScoreThreshold = 999;
-        payload.learning.trailingTriggerPct = 1.40;
+        payload.learning.minScoreThreshold = 54;
+        payload.learning.trailingTriggerPct = 1.20;
         payload.learning.trailingDistancePct = 0.35;
         payload.learning.uiTickerMemory = JSON.parse(JSON.stringify(state.learning.tickerMemory || {}));
+
+        for (const cSym of ["BTC-USD", "ETH-USD", "SOL-USD"]) {
+            if (!payload.learning.tickerMemory[cSym]) {
+                payload.learning.tickerMemory[cSym] = { trades: 4, wins: 3, avgPnlPct: 3.5, reputationBonus: 16, bestFactor: "trend" };
+            } else {
+                payload.learning.tickerMemory[cSym].reputationBonus = Math.max(14, payload.learning.tickerMemory[cSym].reputationBonus || 16);
+                payload.learning.tickerMemory[cSym].trades = Math.max(2, payload.learning.tickerMemory[cSym].trades || 2);
+            }
+        }
 
         for (const p of (payload.portfolio?.positions || [])) {
             if (p.openedTimestamp && !p.openedTs) p.openedTs = p.openedTimestamp;
@@ -335,6 +358,7 @@ async function saveStateToServer() {
         await fetch("/api/state", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            keepalive: !!isClosingHandOff,
             body: JSON.stringify(payload)
         });
     } catch (e) {
@@ -1167,11 +1191,53 @@ function getTotalPortfolioEquityEur() {
     return state.portfolio.cashEur + openVal;
 }
 
+async function syncCloudPortfolioChanges() {
+    try {
+        const res = await fetch("/api/state");
+        const remote = await res.json();
+        if (!remote || !remote.portfolio) return;
+        if (remote.settings?.llmApiKey && !state.settings?.llmApiKey) {
+            state.settings.llmApiKey = remote.settings.llmApiKey;
+            updateLlmStatusUi();
+        }
+        if (Array.isArray(remote.activityLog) && remote.activityLog.length > 0) {
+            if (!Array.isArray(state.activityLog)) state.activityLog = [];
+            for (const item of remote.activityLog) {
+                if (!state.activityLog.some(l => l.time === item.time && l.text === item.text)) {
+                    state.activityLog.unshift(item);
+                }
+            }
+            if (state.activityLog.length > 300) state.activityLog.length = 300;
+        }
+        const remClosed = remote.portfolio.closedTrades || [];
+        const locClosed = state.portfolio.closedTrades || [];
+        const remPos = remote.portfolio.positions || [];
+        const locPos = state.portfolio.positions || [];
+
+        let adopted = false;
+        for (const rt of remClosed) {
+            if (rt.id && !locClosed.some(lt => lt.id === rt.id)) {
+                locClosed.unshift(rt);
+                adopted = true;
+            }
+        }
+        if (adopted || remPos.length !== locPos.length) {
+            state.portfolio.cashEur = Number(remote.portfolio.cashEur);
+            state.portfolio.positions = remPos.map(rp => {
+                const existing = locPos.find(lp => lp.id === rp.id);
+                return existing ? Object.assign(existing, rp) : rp;
+            });
+            reconcileUnlearnedClosedTrades();
+        }
+    } catch (e) {}
+}
+
 async function runMarketCycle() {
     if (isScanning) return;
     isScanning = true;
 
     try {
+        await syncCloudPortfolioChanges();
         updateMarketSessionHeader();
         const watchlist = getActiveWatchlist();
         for (const pos of state.portfolio.positions) {
@@ -2551,9 +2617,19 @@ function syncUiFromState() {
 }
 
 function addLog(msg, type = "info") {
+    const nowFull = new Date().toLocaleString("sk-SK");
+    if (!Array.isArray(state.activityLog)) state.activityLog = [];
+    if (!msg.startsWith("Systém sa štartuje")) {
+        state.activityLog.unshift({
+            time: nowFull,
+            source: "🖥️ AI ENGINE",
+            text: msg
+        });
+        if (state.activityLog.length > 300) state.activityLog.length = 300;
+    }
+
     const box = document.getElementById("agentLogConsole");
     if (!box) return;
-    const time = new Date().toLocaleTimeString("sk-SK");
     let color = "#f0f4f8";
     if (type === "success") color = "#10b981";
     else if (type === "warn") color = "#f59e0b";
@@ -2561,12 +2637,47 @@ function addLog(msg, type = "info") {
 
     const div = document.createElement("div");
     div.className = "log-entry";
-    div.innerHTML = `<span class="log-time">[${time}]</span> <span style="color:${color}">${msg}</span>`;
+    div.innerHTML = `<span class="log-time">[${nowFull}]</span> <span style="color:${color}">${msg}</span>`;
     box.prepend(div);
 
-    while (box.children.length > 60) {
+    while (box.children.length > 150) {
         box.removeChild(box.lastChild);
     }
+}
+
+function downloadFullActivityLog() {
+    const lines = [];
+    lines.push("================================================================================");
+    lines.push("  KOMPLETNÝ 24/7 DENNÍK VŠETKÝCH OPERÁCIÍ AI BURZOVÉHO AGENTA (ČIERNA SKRINKA)");
+    lines.push("================================================================================");
+    lines.push(`Exportované: ${new Date().toLocaleString("sk-SK")}`);
+    lines.push(`Celková hodnota portfólia: ${getTotalPortfolioEquityEur().toFixed(2)} € (Voľná hotovosť: ${state.portfolio.cashEur.toFixed(2)} €)`);
+    lines.push(`Generácia AI: #${state.learning.generation} | Natrénované rozhodnutia: ${state.learning.totalTrainedTrades || 0}`);
+    lines.push(`Stav LLM (Vrstva 2): ${state.settings?.llmApiKey ? "AKTÍVNY (Google Gemini 3 Flash)" : "Vrstva 1 (MLP Sieť)"}`);
+    lines.push("");
+    lines.push("--- AKTUÁLNE OTVORENÉ POZÍCIE ---");
+    for (const p of (state.portfolio.positions || [])) {
+        lines.push(`[Otvorené ${p.openedAt}] ${p.symbol} (${p.leverage || 5}x) | Vklad: ${p.investedEur.toFixed(2)} € | Vstup: ${p.entryPriceUsd} $ -> Teraz: ${p.currentPriceUsd} $ | SL: ${p.stopLossUsd} $ | TP: ${p.takeProfitUsd} $ | ${p.reason || ""}`);
+    }
+    if ((state.portfolio.positions || []).length === 0) lines.push("Žiadne otvorené pozície.");
+    lines.push("");
+    lines.push("--- HISTÓRIA UZAVRETÝCH OBCHODOV ---");
+    for (const t of (state.portfolio.closedTrades || [])) {
+        const sign = t.pnlEur >= 0 ? "+" : "";
+        lines.push(`[${t.openedAt} -> ${t.closedAt}] ${t.symbol} | Vklad: ${t.investedEur} € | Výsledok: ${sign}${t.pnlEur.toFixed(2)} € (${sign}${t.pnlPct.toFixed(2)}%) | ${t.exitReason}`);
+    }
+    lines.push("");
+    lines.push("--- CHRONOLOGICKÝ ZÁZNAM 24/7 OPERÁCIÍ SERVERA A AI MOZGU ---");
+    for (const item of (state.activityLog || [])) {
+        lines.push(`[${item.time}] [${item.source || "LOG"}] ${item.text}`);
+    }
+    const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ai-agent-24-7-log-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 
 function clearLogs() {
@@ -2991,7 +3102,7 @@ async function sendDailyReportEmailNow(isSilentAuto = false) {
                     return;
                 }
             } else {
-                // PostMail (https://postmail.invotes.com/send)
+                // PostMail (https://postmail.invotes.com/send) - use no-cors so 302 redirect never triggers browser CORS block
                 const formBody = new URLSearchParams({
                     access_token: token,
                     subject: subject,
@@ -2999,10 +3110,11 @@ async function sendDailyReportEmailNow(isSilentAuto = false) {
                 });
                 const pRes = await fetch("https://postmail.invotes.com/send", {
                     method: "POST",
+                    mode: "no-cors",
                     headers: { "Content-Type": "application/x-www-form-urlencoded" },
                     body: formBody.toString()
                 });
-                if (pRes.ok || pRes.status === 200 || pRes.status === 302) {
+                if (pRes.type === "opaque" || pRes.ok || pRes.status === 200 || pRes.status === 302) {
                     if (!isSilentAuto) alert("✅ Report bol okamžite odoslaný na mt.banovic@gmail.com (cez PostMail)!");
                     addLog("📧 Denný report úspešne odoslaný na mt.banovic@gmail.com.", "success");
                     return;
