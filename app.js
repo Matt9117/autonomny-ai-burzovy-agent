@@ -251,6 +251,12 @@ async function loadStateFromServer() {
             if (!state.portfolio.initialCapitalEur || state.portfolio.initialCapitalEur < 500) {
                 state.portfolio.initialCapitalEur = 1000.00;
             }
+            if (Array.isArray(state.portfolio.positions)) {
+                state.portfolio.positions = state.portfolio.positions.filter(p => p.openedAt !== "16:48:48");
+            }
+            if (Array.isArray(state.portfolio.closedTrades)) {
+                state.portfolio.closedTrades = state.portfolio.closedTrades.filter(t => t.openedAt !== "16:48:48" && t.openedAt !== "16:49:20" && t.openedAt !== "16:24:52");
+            }
             if (state.learning.minScoreThreshold > 42 || state.learning.minScoreThreshold < 34) {
                 state.learning.minScoreThreshold = 38;
             }
