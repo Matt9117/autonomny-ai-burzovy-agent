@@ -290,6 +290,13 @@ function saveServerState(newStateObj) {
         if (serverState.learning && !serverState.learning.neuralNet && prevNeuralNet) {
             serverState.learning.neuralNet = prevNeuralNet;
         }
+        // Permanently filter out pre-MLP zombie trades from 16:48:48 if an old browser tab ever tries to push them
+        if (Array.isArray(serverState.portfolio?.positions)) {
+            serverState.portfolio.positions = serverState.portfolio.positions.filter(p => p.openedAt !== "16:48:48");
+        }
+        if (Array.isArray(serverState.portfolio?.closedTrades)) {
+            serverState.portfolio.closedTrades = serverState.portfolio.closedTrades.filter(t => t.openedAt !== "16:48:48" && t.openedAt !== "16:49:20" && t.openedAt !== "16:24:52");
+        }
         if (!Array.isArray(serverState.activityLog) || serverState.activityLog.length < prevLogs.length) {
             const incomingLogs = Array.isArray(serverState.activityLog) ? serverState.activityLog : [];
             const merged = [...incomingLogs];
