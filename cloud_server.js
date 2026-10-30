@@ -256,9 +256,50 @@ async function loadInitialState() {
 }
 
 let gistSyncTimeout = null;
+
+function appendCloudLog(text, source = "☁️ 24/7 CLOUD") {
+    if (!Array.isArray(serverState.activityLog)) {
+        serverState.activityLog = [];
+    }
+    const nowStr = new Date().toLocaleString("sk-SK", { timeZone: "Europe/Bratislava" });
+    serverState.activityLog.unshift({
+        time: nowStr,
+        source,
+        text
+    });
+    if (serverState.activityLog.length > 300) {
+        serverState.activityLog.length = 300;
+    }
+}
+
 function saveServerState(newStateObj) {
     if (newStateObj && newStateObj.portfolio) {
+        const prevLlmKey = serverState.settings?.llmApiKey || "";
+        const prevEmail = serverState.settings?.reportEmail || "mt.banovic@gmail.com";
+        const prevToken = serverState.settings?.emailAccessToken || "vvtbwu0zpwfeeuda61is0iu1";
+        const prevMorning = serverState.settings?.reportMorningTime || "08:00";
+        const prevNeuralNet = serverState.learning?.neuralNet || null;
+        const prevLogs = Array.isArray(serverState.activityLog) ? serverState.activityLog : [];
+
         serverState = newStateObj;
+        if (!serverState.settings) serverState.settings = {};
+        if (!serverState.settings.llmApiKey && prevLlmKey) serverState.settings.llmApiKey = prevLlmKey;
+        if (!serverState.settings.reportEmail) serverState.settings.reportEmail = prevEmail;
+        if (!serverState.settings.emailAccessToken) serverState.settings.emailAccessToken = prevToken;
+        if (!serverState.settings.reportMorningTime) serverState.settings.reportMorningTime = prevMorning;
+        if (serverState.learning && !serverState.learning.neuralNet && prevNeuralNet) {
+            serverState.learning.neuralNet = prevNeuralNet;
+        }
+        if (!Array.isArray(serverState.activityLog) || serverState.activityLog.length < prevLogs.length) {
+            const incomingLogs = Array.isArray(serverState.activityLog) ? serverState.activityLog : [];
+            const merged = [...incomingLogs];
+            for (const item of prevLogs) {
+                if (!merged.some(m => m.time === item.time && m.text === item.text)) {
+                    merged.push(item);
+                }
+            }
+            serverState.activityLog = merged.slice(0, 300);
+        }
     }
     try {
         fs.writeFileSync(STATE_FILE, JSON.stringify(serverState), "utf8");
@@ -677,23 +718,21 @@ async function backgroundHeadlessTick() {
             const levPnlPct = (rawPnlPct * lev) - feePct;
             const peakRawPct = ((pos.highPriceUsd - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
 
-            // V5 3-Tier Progressive Trailing Stop:
-            // Tier 3 (>= 2.20% raw move = +22% at 10x): Tight laser lock (0.20% from peak)
-            // Tier 2 (>= 1.20% raw move = +12% at 10x): Trend runner lock (0.38% from peak)
-            // Tier 1 (>= 0.45% raw move = +4.5% at 10x): Break-Even shield (+0.10% above entry) so winners can breathe!
+            // V14 3-Tier Progressive Trailing Stop (Early Break-Even at +0.28% raw = +1.4% at 5x):
             let targetStop = pos.stopLossUsd;
-            if (peakRawPct >= 2.20) {
-                targetStop = pos.highPriceUsd * (1 - 0.20 / 100);
-            } else if (peakRawPct >= 1.20) {
-                targetStop = pos.highPriceUsd * (1 - 0.38 / 100);
-            } else if (peakRawPct >= 0.45) {
-                const breakEvenStop = pos.entryPriceUsd * (1 + 0.10 / 100);
-                const wideTrailStop = pos.highPriceUsd * (1 - 0.52 / 100);
+            if (peakRawPct >= 1.60) {
+                targetStop = pos.highPriceUsd * (1 - 0.18 / 100);
+            } else if (peakRawPct >= 0.85) {
+                targetStop = pos.highPriceUsd * (1 - 0.28 / 100);
+            } else if (peakRawPct >= 0.28) {
+                const breakEvenStop = pos.entryPriceUsd * (1 + 0.06 / 100);
+                const wideTrailStop = pos.highPriceUsd * (1 - 0.35 / 100);
                 targetStop = Math.max(breakEvenStop, wideTrailStop);
             }
             if (targetStop > pos.stopLossUsd) {
                 pos.stopLossUsd = Number(targetStop.toFixed(4));
                 pos.trailingActive = true;
+                appendCloudLog(`🛡️ Posunutý Trailing Stop pre ${pos.symbol} na ${pos.stopLossUsd} $ (cena ${pos.currentPriceUsd} $)`, "☁️ 24/7 CLOUD");
                 changed = true;
             }
 
@@ -702,11 +741,11 @@ async function backgroundHeadlessTick() {
             const usRegular = isUsRegularSession();
 
             if (pos.currentPriceUsd <= pos.stopLossUsd) {
-                sellReason = pos.trailingActive ? `24/7 Cloud V5 Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
+                sellReason = pos.trailingActive ? `24/7 Cloud V14 Trailing Stop (${lev}x)` : `24/7 Cloud ATR Stop-Loss (${lev}x)`;
             } else if (pos.currentPriceUsd >= pos.takeProfitUsd) {
                 sellReason = `24/7 Cloud TURBO Take-Profit (+${levPnlPct.toFixed(2)}%)!`;
-            } else if (canRotatePos && mkt.aiScore <= -38) {
-                sellReason = `24/7 Cloud Silný obrat AI trendu (${mkt.aiScore})`;
+            } else if (levPnlPct >= 0.15 && canRotatePos && mkt.aiScore <= -30) {
+                sellReason = `24/7 Cloud Uzamknutie zisku pri obrate trendu (${mkt.aiScore})`;
             } else if (levPnlPct >= 0.05 && usRegular && isCryptoPos && ageMins >= 20 && levPnlPct < 2.0 && topUnheld && !topUnheld.symbol.endsWith("-USD") && topUnheld.aiScore >= 52) {
                 sellReason = `🔔 US Opening Bell Boost (v pluse): presun z krypta ${pos.symbol} do US rakety ${topUnheld.symbol}`;
             } else if (levPnlPct >= 0.05 && canRotatePos && ageMins >= 35 && levPnlPct < 1.5 && topUnheld && topUnheld.aiScore >= mkt.aiScore + 25 && topUnheld.aiScore >= 55) {
@@ -739,9 +778,10 @@ async function backgroundHeadlessTick() {
                     openedAt: pos.openedAt,
                     closedAt: new Date().toLocaleTimeString("sk-SK"),
                     exitReason: sellReason,
-                    lesson: `Cloud 24/7 V5 Hyper-Growth (Gen #${serverState.learning.generation})`
+                    lesson: `Cloud 24/7 V15 Hyper-Growth (Gen #${serverState.learning.generation})`
                 });
                 if (serverState.portfolio.closedTrades.length > 100) serverState.portfolio.closedTrades.pop();
+                appendCloudLog(`💰 PREDANÉ ${pos.symbol} (${lev}x) @ ${fillExitPrice} $ | Výsledok: ${pnlEur >= 0 ? "+" : ""}${pnlEur.toFixed(2)} € (${fillLevPct >= 0 ? "+" : ""}${fillLevPct.toFixed(2)}%) | ${sellReason}`, "☁️ 24/7 CLOUD");
                 syncTickerMemoryFromTrades();
                 changed = true;
             }
@@ -769,8 +809,6 @@ async function backgroundHeadlessTick() {
             for (const cand of candidates) {
                 if (positions.length >= maxPositions || serverState.portfolio.cashEur < 5.0) break;
 
-                // V5 Conviction Sizing (Smart Kelly Multiplier):
-                // A+ Rocket (AI >= 55 & proven reputation) gets 1.35x allocation; exploratory signal (< 36) gets 0.80x
                 let convictionMult = 1.0;
                 if (cand.aiScore >= 55 && (cand.repBonus || 0) >= 4) {
                     convictionMult = 1.35;
@@ -804,12 +842,22 @@ async function backgroundHeadlessTick() {
                     trailingActive: false,
                     openedAt: new Date().toLocaleTimeString("sk-SK"),
                     openedTimestamp: Date.now(),
-                    reason: `🚀 V5 (${convictionMult}x vklad) | ${defaultLev}x Páka | AI +${cand.aiScore} | RVOL ${cand.rvol || 1}x`,
+                    reason: `🚀 Cloud 24/7 (${convictionMult}x vklad) | ${defaultLev}x Páka | AI +${cand.aiScore} | RVOL ${cand.rvol || 1}x`,
                     entryFactors: cand.factors
                 });
                 serverState.portfolio.cashEur = Number((serverState.portfolio.cashEur - amountEur).toFixed(2));
+                appendCloudLog(`🟢 NÁKUP ${cand.symbol} (${defaultLev}x) za ${amountEur.toFixed(2)} € @ ${cand.price} $ | AI +${cand.aiScore}`, "☁️ 24/7 CLOUD");
                 changed = true;
             }
+        }
+
+        // Record heartbeat scan every ~5 minutes so user has complete 24/7 audit log
+        const nowMs = Date.now();
+        if (!global.lastHeartbeatLogMs || nowMs - global.lastHeartbeatLogMs >= 240000) {
+            global.lastHeartbeatLogMs = nowMs;
+            const posSummary = positions.map(p => `${p.symbol}@${p.currentPriceUsd}$`).join(", ") || "žiadne";
+            appendCloudLog(`🔍 24/7 Sken trhu (${Object.keys(marketMap).length} titulov) | Hodnota: ${totalEquityEur.toFixed(2)} € | Hotovosť: ${serverState.portfolio.cashEur.toFixed(2)} € | Pozície: ${posSummary}`, "☁️ 24/7 CLOUD");
+            changed = true;
         }
 
         if (changed) saveServerState(serverState);
@@ -839,7 +887,7 @@ const server = http.createServer(async (req, res) => {
 
     try {
         if (pathname === "/api/ping") {
-            return sendJson({ ok: true, status: "alive", version: 4, generation: serverState.learning?.generation, timestamp: Date.now() });
+            return sendJson({ ok: true, status: "alive", version: 15, generation: serverState.learning?.generation, timestamp: Date.now() });
         }
 
         if (pathname === "/api/self-update") {
@@ -860,7 +908,13 @@ const server = http.createServer(async (req, res) => {
                     }).on("error", () => resolve());
                 });
             }
-            return sendJson({ ok: true, updated: true, timestamp: Date.now() });
+            appendCloudLog("🔄 Aktualizácia súborov z GitHubu (/api/self-update) úspešne dokončená.", "☁️ SYSTÉM");
+            saveServerState(serverState);
+            sendJson({ ok: true, updated: true, restarting: parsedUrl.query.restart === "1", timestamp: Date.now() });
+            if (parsedUrl.query.restart === "1") {
+                setTimeout(() => process.exit(0), 600);
+            }
+            return;
         }
 
         if (pathname === "/api/market" || pathname === "/api/history") {
@@ -977,6 +1031,8 @@ const server = http.createServer(async (req, res) => {
 
 loadInitialState().then(() => {
     syncTickerMemoryFromTrades();
+    appendCloudLog(`🚀 24/7 Cloud Server naštartovaný a pripravený (Gen #${serverState.learning?.generation || 1}).`, "☁️ SYSTÉM");
+    saveServerState(serverState);
     server.listen(PORT, () => {
         console.log(`============================================================`);
         console.log(`  24/7 CLOUD AI TRADING AGENT RUNNING ON PORT ${PORT}`);
@@ -986,16 +1042,17 @@ loadInitialState().then(() => {
     // Run server-side 24/7 autonomous trading & learning loop every 45 seconds
     setInterval(backgroundHeadlessTick, 45000);
 
-    // Check every 60 seconds for 08:00 Europe/Bratislava daily email report to mt.banovic@gmail.com
-    setInterval(async () => {
+    // Check every 60 seconds for 08:00+ Europe/Bratislava daily email report to mt.banovic@gmail.com
+    const checkMorningEmail = async () => {
         try {
             const skNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Bratislava" }));
             const yyyy = skNow.getFullYear();
             const mm = String(skNow.getMonth() + 1).padStart(2, "0");
             const dd = String(skNow.getDate()).padStart(2, "0");
             const todayStr = `${yyyy}-${mm}-${dd}`;
-            if (skNow.getHours() === 8 && serverState.lastEmailReportDate !== todayStr) {
+            if (skNow.getHours() >= 8 && skNow.getHours() <= 11 && serverState.lastEmailReportDate !== todayStr) {
                 serverState.lastEmailReportDate = todayStr;
+                appendCloudLog(`📧 Automatické ranné hlásenie (08:00) odoslané na mt.banovic@gmail.com (${todayStr}).`, "☁️ 24/7 CLOUD");
                 saveServerState(serverState);
                 await sendDailyEmailReport("mt.banovic@gmail.com");
                 console.log(`[EMAIL REPORT] Daily 08:00 report sent to mt.banovic@gmail.com (${todayStr})`);
@@ -1003,12 +1060,13 @@ loadInitialState().then(() => {
         } catch (e) {
             console.warn("[EMAIL REPORT] Scheduler warning:", e.message);
         }
-    }, 60000);
+    };
+    setInterval(checkMorningEmail, 60000);
+    setTimeout(checkMorningEmail, 5000);
 
-    // Self-ping keep-alive on Render if RENDER_EXTERNAL_URL is present
-    if (process.env.RENDER_EXTERNAL_URL) {
-        setInterval(() => {
-            httpsGetJson(`${process.env.RENDER_EXTERNAL_URL}/api/ping`).catch(() => {});
-        }, 8 * 60 * 1000);
-    }
+    // Self-ping keep-alive on Render every 5 minutes (prevents Free Tier 15-min hibernation)
+    const externalPingUrl = process.env.RENDER_EXTERNAL_URL || "https://autonomny-ai-burzovy-agent.onrender.com";
+    setInterval(() => {
+        httpsGetJson(`${externalPingUrl}/api/ping`).catch(() => {});
+    }, 5 * 60 * 1000);
 });
